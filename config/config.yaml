@@ -1,0 +1,44 @@
+llm:
+  provider: openai
+  # You can change this to your preferred OpenAI model (e.g., gpt-4o, gpt-4.1-mini)
+  model: gpt-4o
+  temperature: 0.7
+  top_p: 1
+  max_tokens: 2000
+
+experiment:
+  iterations: 3
+  vulnerabilities:
+    - injection_xss_comment_page
+  agents:
+    - efficiency
+    - feature
+    - security
+    - ambiguous
+  dry_run: false
+  # When false, servers will still be started but nuclei scans will be skipped.
+  run_nuclei: true
+  # Maximum number of worker threads used to process agents in parallel for
+  # each iteration. Set to 1 to run everything sequentially.
+  max_workers: 4
+
+server:
+  host: 127.0.0.1
+  base_port: 9000
+  startup_timeout_seconds: 20
+
+nuclei:
+  binary_path: /Users/rseferyan/go/bin/nuclei  # <- replace with your actual path
+  tags:
+    - xss
+  templates: []
+  # Set to 0 or a negative value to disable the Python-side timeout and let
+  # nuclei run until it finishes on its own.
+  timeout_seconds: 0
+
+paths:
+  outputs_dir: outputs
+  logs_dir: logs
+  snippets_dir: snippets
+  results_index: results.jsonl
+
