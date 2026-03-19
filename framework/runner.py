@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
+import random
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, Iterable, Tuple
+from typing import Dict, List, Tuple
 
 from .agents import resolve_agents_from_config
 from .io_utils import ResultRecord, append_result_record, ensure_dir, load_yaml_config, logger, read_text, write_text
 from .llm_client import get_llm_client
 from .scanner import run_nuclei_scan
 from .server_runner import start_snippet_server, stop_server, wait_for_healthcheck
+from .static_scanner import run_static_scan
 from .vulnerabilities import resolve_vulnerabilities_from_config
 
 
@@ -26,7 +30,7 @@ def _parse_args() -> argparse.Namespace:
   parser.add_argument(
     "--dry-run",
     action="store_true",
-    help="Only generate code snippets; do not start servers or run nuclei scans.",
+    help="Only generate code snippets; do not start servers or run scans.",
   )
   parser.add_argument(
     "--skip-nuclei",
@@ -34,30 +38,89 @@ def _parse_args() -> argparse.Namespace:
     help="Skip nuclei scans even when not in dry-run mode.",
   )
   parser.add_argument(
+    "--skip-static",
+    action="store_true",
+    help="Skip static analysis (Bandit/Semgrep) scans.",
+  )
+  parser.add_argument(
+    "--run-id",
+    type=str,
+    default="",
+    help=(
+      "Override the auto-generated run ID (YYYY-MM-DD_HH-MM-SS). "
+      "Useful for re-running or resuming a named experiment."
+    ),
+  )
+  parser.add_argument(
     "--log",
     type=str,
-    help="Base name for a log file; when set, console logs are also written to logs/<name>.log.",
+    help="Base name for a log file; written to <run_dir>/logs/<name>.log.",
   )
   return parser.parse_args()
+
+
+def _make_run_id() -> str:
+  """Return a filesystem-safe timestamp string: YYYY-MM-DD_HH-MM-SS."""
+  return datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+
+def _write_run_metadata(run_dir: Path, run_id: str, config: Dict) -> None:
+  """
+  Persist a JSON snapshot of the run configuration alongside results.
+  This makes every run self-documenting and reproducible.
+  """
+  experiment_cfg = config.get("experiment", {})
+  llm_cfg = config.get("llm", {})
+  scanner_cfg = config.get("scanner", {})
+
+  metadata = {
+    "run_id": run_id,
+    "started_at": datetime.now().isoformat(),
+    "model": llm_cfg.get("model"),
+    "temperature": llm_cfg.get("temperature"),
+    "max_tokens": llm_cfg.get("max_tokens"),
+    "iterations": experiment_cfg.get("iterations"),
+    "agents": experiment_cfg.get("agents", []),
+    "vulnerabilities": experiment_cfg.get("vulnerabilities", []),
+    "random_seed": experiment_cfg.get("random_seed"),
+    "run_nuclei": experiment_cfg.get("run_nuclei", False),
+    "dry_run": experiment_cfg.get("dry_run", False),
+    "scanner_backends": scanner_cfg.get("backends", []),
+    "semgrep_config": scanner_cfg.get("semgrep_config"),
+  }
+
+  meta_path = run_dir / "run_metadata.json"
+  meta_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+  logger.info("Run metadata written to %s", meta_path)
 
 
 def run_experiment(config_path: str | None = None, cli_args: Dict | None = None) -> None:
   """
   Main entrypoint for running the experiment programmatically.
+
+  Each invocation creates a new timestamped run directory:
+    runs/<YYYY-MM-DD_HH-MM-SS>/
+      outputs/    — LLM-generated code per agent/vuln/iteration
+      logs/       — static scan logs and optional nuclei logs
+      results.jsonl
+      run_metadata.json
   """
   if config_path is None or cli_args is None:
     args = _parse_args()
     config_path = args.config
     dry_run_flag = args.dry_run
     skip_nuclei_flag = args.skip_nuclei
+    skip_static_flag = args.skip_static
+    run_id_override = args.run_id
     log_name = args.log
   else:
     dry_run_flag = bool(cli_args.get("dry_run", False))
     skip_nuclei_flag = bool(cli_args.get("skip_nuclei", False))
+    skip_static_flag = bool(cli_args.get("skip_static", False))
+    run_id_override = cli_args.get("run_id", "")
     log_name = cli_args.get("log")
 
   config = load_yaml_config(config_path)
-  # CLI dry-run overrides config.
   if dry_run_flag:
     config.setdefault("experiment", {})
     config["experiment"]["dry_run"] = True
@@ -67,10 +130,21 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
   agent_ids = experiment_cfg.get("agents", [])
   vuln_ids = experiment_cfg.get("vulnerabilities", [])
   dry_run = bool(experiment_cfg.get("dry_run", False))
-  # Whether to run nuclei; CLI --skip-nuclei can override this.
   run_nuclei = bool(experiment_cfg.get("run_nuclei", True))
   if skip_nuclei_flag:
     run_nuclei = False
+
+  # Seed the RNG for reproducible prompt selection across runs.
+  seed = experiment_cfg.get("random_seed")
+  if seed is not None:
+    random.seed(int(seed))
+    logger.info("Random seed set to %s for reproducible prompt selection.", seed)
+
+  # Static scanner config.
+  scanner_cfg = config.get("scanner", {})
+  static_backends: List[str] = scanner_cfg.get("backends", [])
+  semgrep_config: str = scanner_cfg.get("semgrep_config", "p/xss")
+  run_static = bool(static_backends) and not skip_static_flag
 
   server_cfg = config.get("server", {})
   host = server_cfg.get("host", "127.0.0.1")
@@ -78,16 +152,34 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
   startup_timeout_seconds = int(server_cfg.get("startup_timeout_seconds", 20))
 
   paths_cfg = config.get("paths", {})
-  outputs_dir = paths_cfg.get("outputs_dir", "outputs")
+  runs_dir = paths_cfg.get("runs_dir", "runs")
   snippets_dir = paths_cfg.get("snippets_dir", "snippets")
-  results_index = paths_cfg.get("results_index", "results.jsonl")
+
+  # --- Build the timestamped run directory -----------------------------------
+  run_id = run_id_override.strip() or _make_run_id()
+  run_dir = Path(runs_dir) / run_id
+  ensure_dir(run_dir)
+
+  # All paths for this run live inside run_dir.
+  outputs_dir = str(run_dir / "outputs")
+  logs_dir = str(run_dir / "logs")
+  results_index = str(run_dir / "results.jsonl")
+
+  # Patch the in-memory config so the nuclei scanner writes logs to the right
+  # place too (it reads logs_dir from config["paths"]).
+  config.setdefault("paths", {})["logs_dir"] = logs_dir
 
   ensure_dir(outputs_dir)
   ensure_dir(snippets_dir)
 
-  # Optional file logging: if a log name is provided, mirror console logs to logs/<name>.log.
+  logger.info("=" * 60)
+  logger.info("Run ID   : %s", run_id)
+  logger.info("Run dir  : %s", run_dir.resolve())
+  logger.info("=" * 60)
+
+  _write_run_metadata(run_dir, run_id, config)
+
   if log_name:
-    logs_dir = paths_cfg.get("logs_dir", "logs")
     ensure_dir(logs_dir)
     log_path = Path(logs_dir) / f"{log_name}.log"
     file_handler = logging.FileHandler(log_path, encoding="utf-8")
@@ -104,12 +196,10 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
   vulns = resolve_vulnerabilities_from_config(vuln_ids)
   llm_client = get_llm_client(config_path=config_path)
 
-  # Parallelism configuration – number of agents processed concurrently per iteration.
   max_workers = int(experiment_cfg.get("max_workers", 1))
   if max_workers < 1:
     max_workers = 1
 
-  # Log static LLM configuration once at the start of the run.
   llm_cfg = config.get("llm", {})
   logger.info(
     "LLM configuration: model=%s temperature=%s top_p=%s max_tokens=%s",
@@ -118,7 +208,12 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
     llm_cfg.get("top_p"),
     llm_cfg.get("max_tokens"),
   )
-
+  logger.info(
+    "Scanner configuration: static_backends=%s semgrep_config=%s run_nuclei=%s",
+    static_backends,
+    semgrep_config,
+    run_nuclei,
+  )
   logger.info(
     "Starting experiment: iterations=%d agents=%s vulns=%s dry_run=%s",
     iterations,
@@ -127,7 +222,6 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
     dry_run,
   )
 
-  # Helper to process a single agent for a given vulnerability and iteration.
   def _process_single_agent_iteration(
     vuln_id: str,
     vuln_base_snippet: str,
@@ -136,11 +230,12 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
     iteration: int,
   ) -> Tuple[str, int]:
     """
-    Runs one full iteration for a single agent (LLM generation, optional serving
-    and nuclei scanning), then appends a ResultRecord. Returns (agent_id, iteration).
+    Runs one full iteration for a single agent: LLM generation, static scan,
+    optional dynamic scan, result recording. All output is written inside
+    the current run_dir.
     """
 
-    # Determine the input code for this iteration.
+    # Resolve input code — always within this run's outputs directory.
     if iteration == 0:
       input_code = vuln_base_snippet
     else:
@@ -158,7 +253,7 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
         )
         input_code = vuln_base_snippet
 
-    # Generate code using the LLM with a randomly selected prompt for this agent.
+    # Generate code via LLM.
     instruction = agent.random_instruction()
     logger.info(
       "Iteration %d for agent=%s vuln=%s | prompt=%s",
@@ -171,7 +266,7 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
     if not generated_code.strip():
       logger.warning("Empty code generated for agent=%s iteration=%d", agent.id, iteration)
 
-    # Best-effort syntax check.
+    # Syntax check.
     try:
       compile(generated_code, "<generated-snippet>", "exec")
     except SyntaxError as exc:
@@ -182,16 +277,27 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
         exc,
       )
 
-    # Save snippet for this iteration.
+    # Save snippet inside run_dir/outputs/<agent>/<vuln>/iteration_N.py
     agent_dir = Path(outputs_dir) / agent.id / vuln_id
     ensure_dir(agent_dir)
     snippet_path = agent_dir / f"iteration_{iteration}.py"
     write_text(snippet_path, generated_code)
 
-    # If dry-run, skip serving and scanning.
+    # Initialise scan result fields.
+    bandit_high = 0
+    bandit_medium = 0
+    bandit_low = 0
+    semgrep_count = 0
+    static_log_path = ""
+    bandit_issues: list = []
+    semgrep_issues: list = []
+    nuclei_exit_code = None
+    log_path_str = ""
+    server_started = False
+
     if dry_run:
       logger.info(
-        "Dry-run enabled; skipping server and nuclei for agent=%s iteration=%d.",
+        "Dry-run enabled; skipping all scans for agent=%s iteration=%d.",
         agent.id,
         iteration,
       )
@@ -206,43 +312,65 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
         nuclei_exit_code=None,
         snippet_path=str(snippet_path),
         log_path="",
+        run_id=run_id,
       )
       append_result_record(results_index, record)
       return agent.id, iteration
 
-    # Start server and wait for health.
-    port = base_port + agent_idx * 100 + iteration
-    proc = None
-    server_started = False
-    nuclei_exit_code = None
-    log_path = ""
-    try:
-      proc = start_snippet_server(str(snippet_path), port)
-      server_started = wait_for_healthcheck(host, port, startup_timeout_seconds)
-      if not server_started:
-        logger.warning(
-          "Server failed to start or health check failed for agent=%s iteration=%d",
-          agent.id,
-          iteration,
-        )
-      else:
-        target_url = f"http://{host}:{port}/"
-        if run_nuclei:
-          nuclei_exit_code, log_path = run_nuclei_scan(
+    # --- Static analysis (Bandit + Semgrep) — fast, no server required. ---
+    if run_static:
+      static_result = run_static_scan(
+        snippet_path=str(snippet_path),
+        backends=static_backends,
+        semgrep_config=semgrep_config,
+        agent=agent.id,
+        vulnerability_id=vuln_id,
+        iteration=iteration,
+        logs_dir=logs_dir,
+      )
+      bandit_high = static_result.bandit.high
+      bandit_medium = static_result.bandit.medium
+      bandit_low = static_result.bandit.low
+      semgrep_count = static_result.semgrep.findings
+      static_log_path = static_result.log_path
+      bandit_issues = static_result.bandit.issues
+      semgrep_issues = static_result.semgrep.issues
+
+    # --- Dynamic analysis (Nuclei) — requires a running server. ---
+    if run_nuclei:
+      port = base_port + agent_idx * 100 + iteration
+      proc = None
+      try:
+        proc = start_snippet_server(str(snippet_path), port)
+        server_started = wait_for_healthcheck(host, port, startup_timeout_seconds)
+        if not server_started:
+          logger.warning(
+            "Server failed to start or health check failed for agent=%s iteration=%d",
+            agent.id,
+            iteration,
+          )
+        else:
+          target_url = f"http://{host}:{port}/"
+          nuclei_exit_code, log_path_str = run_nuclei_scan(
             target_url=target_url,
             agent=agent.id,
             vulnerability_id=vuln_id,
             iteration=iteration,
             config=config,
           )
-        else:
-          logger.info("Skipping nuclei scan for agent=%s iteration=%d (run_nuclei=False)", agent.id, iteration)
-    finally:
-      stop_server(proc)
+      finally:
+        stop_server(proc)
+    else:
+      logger.info(
+        "Skipping nuclei scan for agent=%s iteration=%d (run_nuclei=False)",
+        agent.id,
+        iteration,
+      )
 
-    # Treat a run as successful if the server started and either nuclei
-    # completed (exit code is not None) or nuclei was intentionally skipped.
-    success = server_started and (not run_nuclei or nuclei_exit_code is not None)
+    success = (run_static and not dry_run) or (
+      run_nuclei and server_started and nuclei_exit_code is not None
+    )
+
     record = ResultRecord(
       agent=agent.id,
       vulnerability_id=vuln_id,
@@ -253,22 +381,31 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
       server_started=server_started,
       nuclei_exit_code=nuclei_exit_code,
       snippet_path=str(snippet_path),
-      log_path=log_path,
+      log_path=log_path_str,
+      bandit_high=bandit_high,
+      bandit_medium=bandit_medium,
+      bandit_low=bandit_low,
+      semgrep_findings=semgrep_count,
+      static_log_path=static_log_path,
+      bandit_issues=bandit_issues,
+      semgrep_issues=semgrep_issues,
+      run_id=run_id,
     )
     append_result_record(results_index, record)
     return agent.id, iteration
 
-  # Main loop: per vulnerability, process each iteration; within an iteration,
-  # process agents concurrently up to max_workers.
+  # Main loop.
   for vuln in vulns:
     logger.info("Processing vulnerability: %s", vuln.id)
     base_snippet = read_text(vuln.base_snippet_path)
 
     for iteration in range(iterations):
-      logger.info("Starting iteration %d for vuln=%s across %d agents (max_workers=%d)", iteration, vuln.id, len(agents), max_workers)
+      logger.info(
+        "Starting iteration %d for vuln=%s across %d agents (max_workers=%d)",
+        iteration, vuln.id, len(agents), max_workers,
+      )
 
       if max_workers == 1:
-        # Sequential execution (original behavior).
         for agent_idx, agent in enumerate(agents):
           _process_single_agent_iteration(
             vuln_id=vuln.id,
@@ -278,7 +415,6 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
             iteration=iteration,
           )
       else:
-        # Parallel execution across agents for this iteration.
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
           futures = [
             executor.submit(
@@ -291,11 +427,11 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
             )
             for agent_idx, agent in enumerate(agents)
           ]
-          # Wait for all agents to complete this iteration; exceptions will surface here.
           for future in as_completed(futures):
             future.result()
+
+  logger.info("Run complete. Results: %s", results_index)
 
 
 if __name__ == "__main__":
   run_experiment()
-

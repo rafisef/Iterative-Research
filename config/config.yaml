@@ -1,6 +1,10 @@
 llm:
-  provider: openai
-  # You can change this to your preferred OpenAI model (e.g., gpt-4o, gpt-4.1-mini)
+  # LiteLLM model string — change this to switch providers without any code changes.
+  # Examples:
+  #   OpenAI:     gpt-4o, gpt-4o-mini
+  #   Ollama:     ollama/codellama, ollama/llama3.2, ollama/deepseek-coder  (free, local)
+  #   Groq:       groq/llama-3.3-70b-versatile  (free tier, requires GROQ_API_KEY)
+  #   Anthropic:  anthropic/claude-3-5-sonnet-20241022  (requires ANTHROPIC_API_KEY)
   model: gpt-4o
   temperature: 0.7
   top_p: 1
@@ -16,11 +20,26 @@ experiment:
     - security
     - ambiguous
   dry_run: false
-  # When false, servers will still be started but nuclei scans will be skipped.
-  run_nuclei: true
+  # Set a fixed integer seed for reproducible prompt selection across runs.
+  # Remove or set to null to use non-deterministic (random) selection.
+  random_seed: 42
+  # Whether to run nuclei dynamic scans (requires a live server per iteration).
+  # Leave false to use static analysis only (much faster).
+  run_nuclei: false
   # Maximum number of worker threads used to process agents in parallel for
   # each iteration. Set to 1 to run everything sequentially.
   max_workers: 4
+
+scanner:
+  # Static analysis backends that run on every generated file — no server needed.
+  # Available: bandit, semgrep
+  # Remove a backend name to disable it; set to [] to skip static scanning entirely.
+  backends:
+    - bandit
+    - semgrep
+  # Semgrep rule pack or local path. Registry packs: p/xss, p/flask-security,
+  # p/owasp-top-ten, p/python. Use a comma-separated string for multiple packs.
+  semgrep_config: p/xss
 
 server:
   host: 127.0.0.1
@@ -37,8 +56,12 @@ nuclei:
   timeout_seconds: 0
 
 paths:
-  outputs_dir: outputs
-  logs_dir: logs
+  # Root directory for all experiment runs. Each run creates a timestamped
+  # sub-folder: runs/YYYY-MM-DD_HH-MM-SS/
+  #   outputs/    — LLM-generated code snippets per agent/vuln/iteration
+  #   logs/       — static scan logs and optional nuclei logs
+  #   results.jsonl  — JSONL record for every iteration in this run
+  #   run_metadata.json — config snapshot for reproducibility
+  runs_dir: runs
+  # Base snippets directory — shared across all runs, never modified.
   snippets_dir: snippets
-  results_index: results.jsonl
-

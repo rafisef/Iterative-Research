@@ -4,9 +4,9 @@ import json
 import logging
 import os
 import threading
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import yaml
 
@@ -73,6 +73,19 @@ class ResultRecord:
   nuclei_exit_code: int | None
   snippet_path: str
   log_path: str
+  # Static analysis results (Bandit + Semgrep) — counts.
+  bandit_high: int = 0
+  bandit_medium: int = 0
+  bandit_low: int = 0
+  semgrep_findings: int = 0
+  static_log_path: str = ""
+  # Per-finding detail lists — each entry is a dict with tool-specific keys.
+  # Bandit keys: test_id, test_name, severity, confidence, line_number, issue_text, cwe_id.
+  # Semgrep keys: rule_id, severity, message, line_number, matched_lines.
+  bandit_issues: List[Dict[str, Any]] = field(default_factory=list)
+  semgrep_issues: List[Dict[str, Any]] = field(default_factory=list)
+  # Identifier for the experiment run that produced this record (timestamp string).
+  run_id: str = ""
 
 
 def append_result_record(index_path: str | os.PathLike[str], record: ResultRecord) -> None:
