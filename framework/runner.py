@@ -13,8 +13,6 @@ from typing import Dict, List, Tuple
 from .agents import resolve_agents_from_config
 from .io_utils import ResultRecord, append_result_record, ensure_dir, load_yaml_config, logger, read_text, write_text
 from .llm_client import get_llm_client
-from .scanner import run_nuclei_scan
-from .server_runner import start_snippet_server, stop_server, wait_for_healthcheck
 from .static_scanner import run_static_scan
 from .vulnerabilities import resolve_vulnerabilities_from_config
 
@@ -30,12 +28,7 @@ def _parse_args() -> argparse.Namespace:
   parser.add_argument(
     "--dry-run",
     action="store_true",
-    help="Only generate code snippets; do not start servers or run scans.",
-  )
-  parser.add_argument(
-    "--skip-nuclei",
-    action="store_true",
-    help="Skip nuclei scans even when not in dry-run mode.",
+    help="Only generate code snippets; do not run scans.",
   )
   parser.add_argument(
     "--skip-static",
@@ -83,7 +76,6 @@ def _write_run_metadata(run_dir: Path, run_id: str, config: Dict) -> None:
     "agents": experiment_cfg.get("agents", []),
     "vulnerabilities": experiment_cfg.get("vulnerabilities", []),
     "random_seed": experiment_cfg.get("random_seed"),
-    "run_nuclei": experiment_cfg.get("run_nuclei", False),
     "dry_run": experiment_cfg.get("dry_run", False),
     "scanner_backends": scanner_cfg.get("backends", []),
     "semgrep_config": scanner_cfg.get("semgrep_config"),
@@ -101,21 +93,22 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
   Each invocation creates a new timestamped run directory:
     runs/<YYYY-MM-DD_HH-MM-SS>/
       outputs/    — LLM-generated code per agent/vuln/iteration
-      logs/       — static scan logs and optional nuclei logs
+      logs/       — Bandit + Semgrep static scan logs
       results.jsonl
       run_metadata.json
+
+  Nuclei dynamic scanning is handled separately via nuclei_rescan.py after
+  the run completes, targeting only iterations where static scans found issues.
   """
   if config_path is None or cli_args is None:
     args = _parse_args()
     config_path = args.config
     dry_run_flag = args.dry_run
-    skip_nuclei_flag = args.skip_nuclei
     skip_static_flag = args.skip_static
     run_id_override = args.run_id
     log_name = args.log
   else:
     dry_run_flag = bool(cli_args.get("dry_run", False))
-    skip_nuclei_flag = bool(cli_args.get("skip_nuclei", False))
     skip_static_flag = bool(cli_args.get("skip_static", False))
     run_id_override = cli_args.get("run_id", "")
     log_name = cli_args.get("log")
@@ -130,9 +123,6 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
   agent_ids = experiment_cfg.get("agents", [])
   vuln_ids = experiment_cfg.get("vulnerabilities", [])
   dry_run = bool(experiment_cfg.get("dry_run", False))
-  run_nuclei = bool(experiment_cfg.get("run_nuclei", True))
-  if skip_nuclei_flag:
-    run_nuclei = False
 
   # Seed the RNG for reproducible prompt selection across runs.
   seed = experiment_cfg.get("random_seed")
@@ -145,11 +135,6 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
   static_backends: List[str] = scanner_cfg.get("backends", [])
   semgrep_config: str = scanner_cfg.get("semgrep_config", "p/xss")
   run_static = bool(static_backends) and not skip_static_flag
-
-  server_cfg = config.get("server", {})
-  host = server_cfg.get("host", "127.0.0.1")
-  base_port = int(server_cfg.get("base_port", 9000))
-  startup_timeout_seconds = int(server_cfg.get("startup_timeout_seconds", 20))
 
   paths_cfg = config.get("paths", {})
   runs_dir = paths_cfg.get("runs_dir", "runs")
@@ -164,10 +149,6 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
   outputs_dir = str(run_dir / "outputs")
   logs_dir = str(run_dir / "logs")
   results_index = str(run_dir / "results.jsonl")
-
-  # Patch the in-memory config so the nuclei scanner writes logs to the right
-  # place too (it reads logs_dir from config["paths"]).
-  config.setdefault("paths", {})["logs_dir"] = logs_dir
 
   ensure_dir(outputs_dir)
   ensure_dir(snippets_dir)
@@ -209,10 +190,9 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
     llm_cfg.get("max_tokens"),
   )
   logger.info(
-    "Scanner configuration: static_backends=%s semgrep_config=%s run_nuclei=%s",
+    "Scanner configuration: static_backends=%s semgrep_config=%s",
     static_backends,
     semgrep_config,
-    run_nuclei,
   )
   logger.info(
     "Starting experiment: iterations=%d agents=%s vulns=%s dry_run=%s",
@@ -230,9 +210,13 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
     iteration: int,
   ) -> Tuple[str, int]:
     """
-    Runs one full iteration for a single agent: LLM generation, static scan,
-    optional dynamic scan, result recording. All output is written inside
-    the current run_dir.
+    Runs one full iteration for a single agent: LLM generation, static
+    analysis (Bandit + Semgrep), and result recording. All output is written
+    inside the current run_dir.
+
+    Nuclei dynamic scanning is intentionally excluded here — run
+    nuclei_rescan.py after the experiment to target only the iterations
+    where static scans found vulnerabilities.
     """
 
     # Resolve input code — always within this run's outputs directory.
@@ -283,7 +267,7 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
     snippet_path = agent_dir / f"iteration_{iteration}.py"
     write_text(snippet_path, generated_code)
 
-    # Initialise scan result fields.
+    # Initialise static scan result fields.
     bandit_high = 0
     bandit_medium = 0
     bandit_low = 0
@@ -291,9 +275,6 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
     static_log_path = ""
     bandit_issues: list = []
     semgrep_issues: list = []
-    nuclei_exit_code = None
-    log_path_str = ""
-    server_started = False
 
     if dry_run:
       logger.info(
@@ -314,6 +295,7 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
         log_path="",
         run_id=run_id,
       )
+
       append_result_record(results_index, record)
       return agent.id, iteration
 
@@ -336,40 +318,7 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
       bandit_issues = static_result.bandit.issues
       semgrep_issues = static_result.semgrep.issues
 
-    # --- Dynamic analysis (Nuclei) — requires a running server. ---
-    if run_nuclei:
-      port = base_port + agent_idx * 100 + iteration
-      proc = None
-      try:
-        proc = start_snippet_server(str(snippet_path), port)
-        server_started = wait_for_healthcheck(host, port, startup_timeout_seconds)
-        if not server_started:
-          logger.warning(
-            "Server failed to start or health check failed for agent=%s iteration=%d",
-            agent.id,
-            iteration,
-          )
-        else:
-          target_url = f"http://{host}:{port}/"
-          nuclei_exit_code, log_path_str = run_nuclei_scan(
-            target_url=target_url,
-            agent=agent.id,
-            vulnerability_id=vuln_id,
-            iteration=iteration,
-            config=config,
-          )
-      finally:
-        stop_server(proc)
-    else:
-      logger.info(
-        "Skipping nuclei scan for agent=%s iteration=%d (run_nuclei=False)",
-        agent.id,
-        iteration,
-      )
-
-    success = (run_static and not dry_run) or (
-      run_nuclei and server_started and nuclei_exit_code is not None
-    )
+    success = run_static and not dry_run
 
     record = ResultRecord(
       agent=agent.id,
@@ -378,10 +327,10 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
       prompt=instruction,
       model=config.get("llm", {}).get("model", "unknown"),
       success=success,
-      server_started=server_started,
-      nuclei_exit_code=nuclei_exit_code,
+      server_started=False,
+      nuclei_exit_code=None,
       snippet_path=str(snippet_path),
-      log_path=log_path_str,
+      log_path="",
       bandit_high=bandit_high,
       bandit_medium=bandit_medium,
       bandit_low=bandit_low,

@@ -11,7 +11,7 @@ llm:
   max_tokens: 2000
 
 experiment:
-  iterations: 3
+  iterations: 10
   vulnerabilities:
     - injection_xss_comment_page
   agents:
@@ -23,9 +23,6 @@ experiment:
   # Set a fixed integer seed for reproducible prompt selection across runs.
   # Remove or set to null to use non-deterministic (random) selection.
   random_seed: 42
-  # Whether to run nuclei dynamic scans (requires a live server per iteration).
-  # Leave false to use static analysis only (much faster).
-  run_nuclei: false
   # Maximum number of worker threads used to process agents in parallel for
   # each iteration. Set to 1 to run everything sequentially.
   max_workers: 4
@@ -40,20 +37,6 @@ scanner:
   # Semgrep rule pack or local path. Registry packs: p/xss, p/flask-security,
   # p/owasp-top-ten, p/python. Use a comma-separated string for multiple packs.
   semgrep_config: p/xss
-
-server:
-  host: 127.0.0.1
-  base_port: 9000
-  startup_timeout_seconds: 20
-
-nuclei:
-  binary_path: /Users/rseferyan/go/bin/nuclei  # <- replace with your actual path
-  tags:
-    - xss
-  templates: []
-  # Set to 0 or a negative value to disable the Python-side timeout and let
-  # nuclei run until it finishes on its own.
-  timeout_seconds: 0
 
 paths:
   # Root directory for all experiment runs. Each run creates a timestamped
