@@ -616,6 +616,7 @@ def main() -> None:
         metric_keys: List[Tuple[str, str]] = [
             ("bandit_high", "Bandit HIGH"),
             ("bandit_medium", "Bandit MED"),
+            ("bandit_low", "Bandit LOW"),
             ("semgrep_findings", "Semgrep"),
         ]
     else:
