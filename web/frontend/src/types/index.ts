@@ -28,13 +28,16 @@ export interface ResultRecord {
   nuclei_exit_code: number | null;
   snippet_path: string;
   log_path: string;
-  bandit_high: number;
-  bandit_medium: number;
-  bandit_low: number;
+  bandit_high?: number;
+  bandit_medium?: number;
+  bandit_low?: number;
   semgrep_findings: number;
+  semgrep_error: number;
+  semgrep_warning: number;
+  semgrep_info: number;
   static_log_path: string;
-  bandit_issues: BanditIssue[];
-  semgrep_issues: SemgrepIssue[];
+  bandit_issues?: BanditIssue[];
+  semgrep_issues?: SemgrepIssue[];
 }
 
 export interface BanditIssue {
@@ -115,10 +118,13 @@ export interface TrendGroup {
 
 export interface TrendRow {
   iteration: number;
-  bandit_high: number;
-  bandit_medium: number;
-  bandit_low: number;
+  bandit_high?: number;
+  bandit_medium?: number;
+  bandit_low?: number;
   semgrep_findings: number;
+  semgrep_error: number;
+  semgrep_warning: number;
+  semgrep_info: number;
   prompt: string;
   model: string;
 }
@@ -126,18 +132,20 @@ export interface TrendRow {
 export interface DeltaEntry {
   vulnerability_id: string;
   agent: string;
-  bandit_high_delta: number;
-  bandit_medium_delta: number;
-  bandit_low_delta: number;
-  semgrep_delta: number;
+  bandit_high_delta?: number;
+  bandit_medium_delta?: number;
+  bandit_low_delta?: number;
+  semgrep_error_delta: number;
+  semgrep_warning_delta: number;
+  semgrep_info_delta: number;
 }
 
 export interface FindingGroup {
   vulnerability_id: string;
   agent: string;
   iteration: number;
-  bandit_issues: BanditIssue[];
-  semgrep_issues: SemgrepIssue[];
+  bandit_issues?: BanditIssue[];
+  semgrep_issues?: SemgrepIssue[];
 }
 
 export interface ProcessInfo {

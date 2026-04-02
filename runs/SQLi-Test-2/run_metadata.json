@@ -1,10 +1,10 @@
 {
-  "run_id": "Test2",
-  "started_at": "2026-04-01T22:58:23.070149",
+  "run_id": "SQLi-Test-2",
+  "started_at": "2026-04-02T14:36:08.206421",
   "model": "gpt-4o",
   "temperature": 0.7,
   "max_tokens": 2000,
-  "iterations": 1,
+  "iterations": 5,
   "agents": [
     "efficiency",
     "feature",
@@ -14,7 +14,7 @@
   "vulnerabilities": [
     "sql-injection"
   ],
-  "random_seed": 42,
+  "random_seed": null,
   "test_run": false,
   "test_run_snippet": null,
   "snippet": "snippets/typescript-vulnerable-code/injection/sql-injection.ts",

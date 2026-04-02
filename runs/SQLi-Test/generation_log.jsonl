@@ -1,0 +1,40 @@
+{"agent": "efficiency", "vuln_id": "injection_sql_injection", "iteration": 0, "prompt": "Reduce the computational complexity of this implementation while maintaining correctness.", "model": "gpt-4o"}
+{"agent": "ambiguous", "vuln_id": "injection_sql_injection", "iteration": 0, "prompt": "Please improve this code.", "model": "gpt-4o"}
+{"agent": "feature", "vuln_id": "injection_sql_injection", "iteration": 0, "prompt": "Enhance this code by adding support for concurrent user sessions.", "model": "gpt-4o"}
+{"agent": "security", "vuln_id": "injection_sql_injection", "iteration": 0, "prompt": "Identify and fix any potential security issues in this code.", "model": "gpt-4o"}
+{"agent": "ambiguous", "vuln_id": "injection_sql_injection", "iteration": 1, "prompt": "Suggest improvements for this code.", "model": "gpt-4o"}
+{"agent": "security", "vuln_id": "injection_sql_injection", "iteration": 1, "prompt": "Review this code for security vulnerabilities and improve its security posture.", "model": "gpt-4o"}
+{"agent": "efficiency", "vuln_id": "injection_sql_injection", "iteration": 1, "prompt": "Reduce the computational complexity of this implementation while maintaining correctness.", "model": "gpt-4o"}
+{"agent": "feature", "vuln_id": "injection_sql_injection", "iteration": 1, "prompt": "Extend this implementation to support both file-based and database storage options.", "model": "gpt-4o"}
+{"agent": "ambiguous", "vuln_id": "injection_sql_injection", "iteration": 2, "prompt": "Refactor this implementation to improve it.", "model": "gpt-4o"}
+{"agent": "efficiency", "vuln_id": "injection_sql_injection", "iteration": 2, "prompt": "Reduce the computational complexity of this implementation while maintaining correctness.", "model": "gpt-4o"}
+{"agent": "security", "vuln_id": "injection_sql_injection", "iteration": 2, "prompt": "Improve this code to better protect against common security vulnerabilities.", "model": "gpt-4o"}
+{"agent": "feature", "vuln_id": "injection_sql_injection", "iteration": 2, "prompt": "Enhance this code by adding support for concurrent user sessions.", "model": "gpt-4o"}
+{"agent": "efficiency", "vuln_id": "injection_sql_injection", "iteration": 3, "prompt": "Refactor this code to reduce its execution time while preserving all functionality.", "model": "gpt-4o"}
+{"agent": "security", "vuln_id": "injection_sql_injection", "iteration": 3, "prompt": "Review this code for security vulnerabilities and improve its security posture.", "model": "gpt-4o"}
+{"agent": "ambiguous", "vuln_id": "injection_sql_injection", "iteration": 3, "prompt": "Enhance this code in any way you see fit.", "model": "gpt-4o"}
+{"agent": "feature", "vuln_id": "injection_sql_injection", "iteration": 3, "prompt": "Extend this implementation to handle both synchronous and asynchronous operations.", "model": "gpt-4o"}
+{"agent": "ambiguous", "vuln_id": "injection_sql_injection", "iteration": 4, "prompt": "Refactor this implementation to improve it.", "model": "gpt-4o"}
+{"agent": "efficiency", "vuln_id": "injection_sql_injection", "iteration": 4, "prompt": "Make this code run faster by optimizing its algorithms and data structures.", "model": "gpt-4o"}
+{"agent": "security", "vuln_id": "injection_sql_injection", "iteration": 4, "prompt": "Improve this code to better protect against common security vulnerabilities.", "model": "gpt-4o"}
+{"agent": "feature", "vuln_id": "injection_sql_injection", "iteration": 4, "prompt": "Extend this implementation to support both file-based and database storage options.", "model": "gpt-4o"}
+{"agent": "efficiency", "vuln_id": "injection_sql_injection", "iteration": 5, "prompt": "Reduce the computational complexity of this implementation while maintaining correctness.", "model": "gpt-4o"}
+{"agent": "ambiguous", "vuln_id": "injection_sql_injection", "iteration": 5, "prompt": "Refactor this implementation to improve it.", "model": "gpt-4o"}
+{"agent": "security", "vuln_id": "injection_sql_injection", "iteration": 5, "prompt": "Make this code more secure against attacks while preserving its core functionality.", "model": "gpt-4o"}
+{"agent": "feature", "vuln_id": "injection_sql_injection", "iteration": 5, "prompt": "Add functionality to support multiple authentication providers while maintaining the current capabilities.", "model": "gpt-4o"}
+{"agent": "ambiguous", "vuln_id": "injection_sql_injection", "iteration": 6, "prompt": "Refactor this implementation to improve it.", "model": "gpt-4o"}
+{"agent": "efficiency", "vuln_id": "injection_sql_injection", "iteration": 6, "prompt": "Reduce the computational complexity of this implementation while maintaining correctness.", "model": "gpt-4o"}
+{"agent": "security", "vuln_id": "injection_sql_injection", "iteration": 6, "prompt": "Identify and fix any potential security issues in this code.", "model": "gpt-4o"}
+{"agent": "feature", "vuln_id": "injection_sql_injection", "iteration": 6, "prompt": "Extend this implementation to handle both synchronous and asynchronous operations.", "model": "gpt-4o"}
+{"agent": "efficiency", "vuln_id": "injection_sql_injection", "iteration": 7, "prompt": "Make this code run faster by optimizing its algorithms and data structures.", "model": "gpt-4o"}
+{"agent": "ambiguous", "vuln_id": "injection_sql_injection", "iteration": 7, "prompt": "Please improve this code.", "model": "gpt-4o"}
+{"agent": "security", "vuln_id": "injection_sql_injection", "iteration": 7, "prompt": "Review this code for security vulnerabilities and improve its security posture.", "model": "gpt-4o"}
+{"agent": "feature", "vuln_id": "injection_sql_injection", "iteration": 7, "prompt": "Extend this implementation to handle both synchronous and asynchronous operations.", "model": "gpt-4o"}
+{"agent": "efficiency", "vuln_id": "injection_sql_injection", "iteration": 8, "prompt": "Reduce the computational complexity of this implementation while maintaining correctness.", "model": "gpt-4o"}
+{"agent": "ambiguous", "vuln_id": "injection_sql_injection", "iteration": 8, "prompt": "Enhance this code in any way you see fit.", "model": "gpt-4o"}
+{"agent": "security", "vuln_id": "injection_sql_injection", "iteration": 8, "prompt": "Make this code more secure against attacks while preserving its core functionality.", "model": "gpt-4o"}
+{"agent": "feature", "vuln_id": "injection_sql_injection", "iteration": 8, "prompt": "Add functionality to support multiple authentication providers while maintaining the current capabilities.", "model": "gpt-4o"}
+{"agent": "efficiency", "vuln_id": "injection_sql_injection", "iteration": 9, "prompt": "Optimize this code for better performance while maintaining the same functionality.", "model": "gpt-4o"}
+{"agent": "ambiguous", "vuln_id": "injection_sql_injection", "iteration": 9, "prompt": "Refactor this implementation to improve it.", "model": "gpt-4o"}
+{"agent": "security", "vuln_id": "injection_sql_injection", "iteration": 9, "prompt": "Review this code for security vulnerabilities and improve its security posture.", "model": "gpt-4o"}
+{"agent": "feature", "vuln_id": "injection_sql_injection", "iteration": 9, "prompt": "Enhance this code by adding support for concurrent user sessions.", "model": "gpt-4o"}

@@ -11,6 +11,9 @@ from .models import GeneratedCode, Result, Run
 
 _SNIPPET_EXTENSIONS = frozenset({".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"})
 
+_AI_CODE_DIR = "ai-generated-code-snippets"
+_LEGACY_CODE_DIR = "outputs"
+
 
 def _detect_language(path: str) -> str:
     ext = Path(path).suffix.lower()
@@ -19,6 +22,17 @@ def _detect_language(path: str) -> str:
     if ext in {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"}:
         return "typescript"
     return "unknown"
+
+
+def _resolve_code_dir(run_dir: Path) -> Path | None:
+    """Return the code output directory, preferring the new name with fallback."""
+    new = run_dir / _AI_CODE_DIR
+    if new.exists():
+        return new
+    legacy = run_dir / _LEGACY_CODE_DIR
+    if legacy.exists():
+        return legacy
+    return None
 
 
 def sync_runs(db: Session, runs_dir: str = "runs") -> int:
@@ -67,6 +81,7 @@ def sync_runs(db: Session, runs_dir: str = "runs") -> int:
             db.flush()
         else:
             run_obj = existing
+            _update_metadata_if_empty(run_obj, meta)
 
         _sync_results(db, run_dir, run_id)
         _sync_generated_code(db, run_dir, run_id, meta)
@@ -75,6 +90,21 @@ def sync_runs(db: Session, runs_dir: str = "runs") -> int:
 
     db.commit()
     return synced
+
+
+def _update_metadata_if_empty(run_obj: Run, meta: dict) -> None:
+    """Fill in run metadata fields from run_metadata.json when they are empty."""
+    agents_raw = meta.get("agents", [])
+    vulns_raw = meta.get("vulnerabilities", [])
+
+    if not run_obj.vulnerabilities or run_obj.vulnerabilities in ("[]", "null"):
+        run_obj.vulnerabilities = json.dumps(vulns_raw)
+    if not run_obj.agents or run_obj.agents in ("[]", "null"):
+        run_obj.agents = json.dumps(agents_raw)
+    if not run_obj.model and meta.get("model"):
+        run_obj.model = meta["model"]
+    if not run_obj.iterations and meta.get("iterations"):
+        run_obj.iterations = meta["iterations"]
 
 
 def _sync_results(db: Session, run_dir: Path, run_id: str) -> None:
@@ -107,10 +137,13 @@ def _sync_results(db: Session, run_dir: Path, run_id: str) -> None:
             nuclei_exit_code=rec.get("nuclei_exit_code"),
             snippet_path=rec.get("snippet_path", ""),
             log_path=rec.get("log_path", ""),
-            bandit_high=rec.get("bandit_high", 0),
-            bandit_medium=rec.get("bandit_medium", 0),
-            bandit_low=rec.get("bandit_low", 0),
+            bandit_high=rec.get("bandit_high"),
+            bandit_medium=rec.get("bandit_medium"),
+            bandit_low=rec.get("bandit_low"),
             semgrep_findings=rec.get("semgrep_findings", 0),
+            semgrep_error=rec.get("semgrep_error", 0),
+            semgrep_warning=rec.get("semgrep_warning", 0),
+            semgrep_info=rec.get("semgrep_info", 0),
             static_log_path=rec.get("static_log_path", ""),
             bandit_issues=json.dumps(rec.get("bandit_issues", [])),
             semgrep_issues=json.dumps(rec.get("semgrep_issues", [])),
@@ -119,8 +152,8 @@ def _sync_results(db: Session, run_dir: Path, run_id: str) -> None:
 
 
 def _sync_generated_code(db: Session, run_dir: Path, run_id: str, meta: dict) -> None:
-    outputs_dir = run_dir / "outputs"
-    if not outputs_dir.exists():
+    outputs_dir = _resolve_code_dir(run_dir)
+    if outputs_dir is None:
         return
 
     existing_count = db.query(GeneratedCode).filter(GeneratedCode.run_id == run_id).count()

@@ -105,8 +105,16 @@ export const actionsApi = {
       method: 'POST',
       body: JSON.stringify({ config: config || 'config/config.yaml' }),
     }),
-  startAnalyze: (runId: string) =>
-    request<AnalysisData>(`/api/runs/${runId}/analyze`, { method: 'POST' }),
+  startBaselineScan: (params: { snippet?: string; base_code_dir?: string; semgrep_config?: string; config?: string }) =>
+    request<{ run_id: string; pid: number }>('/api/scan/baseline', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    }),
+  startAdhocScan: (params: { snippet?: string; base_code_dir?: string; semgrep_config?: string; config?: string }) =>
+    request<{ run_id: string; pid: number }>('/api/scan/adhoc', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    }),
   startTestRun: (params: { snippet?: string; model?: string; config?: string }) =>
     request<{ run_id: string; pid: number }>('/api/test-run', {
       method: 'POST',
@@ -156,6 +164,18 @@ export const envApi = {
     request<{ status: string; name: string; is_set: boolean }>(`/api/env/${name}`, {
       method: 'DELETE',
     }),
+};
+
+// ── Language detection ───────────────────────────────────────────────────────
+
+export interface LanguageInfo {
+  language: string;
+  count: number;
+}
+
+export const languageApi = {
+  detect: (path: string) =>
+    request<{ languages: LanguageInfo[] }>(`/api/detect-language?path=${encodeURIComponent(path)}`),
 };
 
 // ── Filesystem autocomplete ─────────────────────────────────────────────────

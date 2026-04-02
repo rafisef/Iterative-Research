@@ -10,7 +10,7 @@ class Vulnerability:
   description: str
   base_snippet_path: str
   # Optional per-vulnerability Semgrep rule pack override.  Empty string means
-  # use the language-default packs from static_scanner._DEFAULT_SEMGREP_PACKS.
+  # Falls back to --config auto when empty and no CLI/UI override is provided.
   # Space-separated for multiple packs (e.g. "p/typescript p/owasp-top-ten").
   semgrep_config: str = ""
 

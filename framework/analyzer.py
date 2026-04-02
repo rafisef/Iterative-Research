@@ -95,20 +95,31 @@ def analyze_run(
         print("[info] No matching records to display.")
         return
 
-    has_static = any(
-        r.get("bandit_high") is not None
+    all_records = [
+        r
         for agent_data in grouped.values()
         for iter_data in agent_data.values()
         for r in iter_data.values()
-    )
+    ]
+
+    has_bandit = any(r.get("bandit_high") is not None for r in all_records)
+    has_semgrep = any(r.get("semgrep_findings") is not None for r in all_records)
+    has_static = has_bandit or has_semgrep
 
     if has_static:
-        metric_keys: List[Tuple[str, str]] = [
-            ("bandit_high", "Bandit HIGH"),
-            ("bandit_medium", "Bandit MED"),
-            ("bandit_low", "Bandit LOW"),
-            ("semgrep_findings", "Semgrep"),
-        ]
+        metric_keys: List[Tuple[str, str]] = []
+        if has_bandit:
+            metric_keys += [
+                ("bandit_high", "Bandit HIGH"),
+                ("bandit_medium", "Bandit MED"),
+                ("bandit_low", "Bandit LOW"),
+            ]
+        if has_semgrep:
+            metric_keys += [
+                ("semgrep_error", "Semgrep ERR"),
+                ("semgrep_warning", "Semgrep WARN"),
+                ("semgrep_info", "Semgrep INFO"),
+            ]
     else:
         metric_keys = [("nuclei_exit_code", "Nuclei exit")]
 
@@ -370,14 +381,14 @@ def print_trend_table(
             max_vals = {key: 1 for key, _ in metric_keys}
             for rec in iterations.values():
                 for key, _ in metric_keys:
-                    max_vals[key] = max(max_vals[key], int(rec.get(key, 0)))
+                    max_vals[key] = max(max_vals[key], int(rec.get(key) or 0))
 
             for it in all_iters:
                 rec = iterations[it]
                 prompt_short = (rec.get("prompt") or "")[:38].replace("\n", " ")
                 print(f"  {it:<6}", end="")
                 for key, _ in metric_keys:
-                    val = int(rec.get(key, 0))
+                    val = int(rec.get(key) or 0)
                     bar = _bar(val, max_vals[key])
                     print(f"  {val:<3} {bar} ", end="")
                 print(f"  {prompt_short}")
@@ -391,7 +402,7 @@ def print_trend_table(
             last = iterations[all_iters[-1]]
             deltas = []
             for key, label in metric_keys:
-                delta = int(last.get(key, 0)) - int(first.get(key, 0))
+                delta = int(last.get(key) or 0) - int(first.get(key) or 0)
                 sign = "+" if delta >= 0 else ""
                 deltas.append(f"{label}: {sign}{delta}")
             print(f"  {agent_id:<14}  {' | '.join(deltas)}")
@@ -502,14 +513,15 @@ def write_csv(
 
     Context columns (repeated per finding):
         run_id, vulnerability_id, agent, model, iteration, prompt,
-        bandit_high, bandit_medium, bandit_low, semgrep_findings,
+        bandit_high, bandit_medium, bandit_low,
+        semgrep_findings, semgrep_error, semgrep_warning, semgrep_info,
         nuclei_exit_code, server_started, success, snippet_path, static_log_path
 
     Finding columns (empty when no findings):
         finding_tool      — "bandit" | "semgrep" | ""
         finding_id        — Bandit test_id  /  Semgrep rule_id
         finding_name      — Bandit test_name  /  "" for Semgrep
-        finding_severity  — HIGH | MEDIUM | LOW | WARNING | ERROR | ""
+        finding_severity  — ERROR | WARNING | INFO (Semgrep) / HIGH | MEDIUM | LOW (Bandit) | ""
         finding_confidence— Bandit confidence (HIGH/MEDIUM/LOW) | ""
         finding_cwe       — e.g. "CWE-78"  |  ""
         finding_line      — source line number | ""
@@ -518,7 +530,8 @@ def write_csv(
     """
     context_fields = [
         "run_id", "vulnerability_id", "agent", "model", "iteration", "prompt",
-        "bandit_high", "bandit_medium", "bandit_low", "semgrep_findings",
+        "bandit_high", "bandit_medium", "bandit_low",
+        "semgrep_findings", "semgrep_error", "semgrep_warning", "semgrep_info",
         "nuclei_exit_code", "server_started", "success",
         "snippet_path", "static_log_path",
     ]
@@ -627,7 +640,10 @@ def analyze_run_json(
         "models": models_set,
         "iteration_range": [min(iters_set), max(iters_set)] if iters_set else [],
         "distinct_iterations": len(iters_set),
-        "has_static_scans": any(r.get("bandit_high") is not None for r in records),
+        "has_static_scans": any(
+            r.get("bandit_high") is not None or r.get("semgrep_findings") is not None
+            for r in records
+        ),
         "has_nuclei_scans": any(r.get("nuclei_exit_code") is not None for r in records),
         "random_seed": meta.get("random_seed") if meta else None,
         "started_at": meta.get("started_at") if meta else None,
@@ -650,10 +666,13 @@ def analyze_run_json(
                 rec = iterations[it]
                 trend_rows.append({
                     "iteration": it,
-                    "bandit_high": rec.get("bandit_high", 0),
-                    "bandit_medium": rec.get("bandit_medium", 0),
-                    "bandit_low": rec.get("bandit_low", 0),
-                    "semgrep_findings": rec.get("semgrep_findings", 0),
+                    "bandit_high": rec.get("bandit_high") or 0,
+                    "bandit_medium": rec.get("bandit_medium") or 0,
+                    "bandit_low": rec.get("bandit_low") or 0,
+                    "semgrep_findings": rec.get("semgrep_findings") or 0,
+                    "semgrep_error": rec.get("semgrep_error") or 0,
+                    "semgrep_warning": rec.get("semgrep_warning") or 0,
+                    "semgrep_info": rec.get("semgrep_info") or 0,
                     "prompt": (rec.get("prompt") or "")[:80],
                     "model": rec.get("model", "?"),
                 })
@@ -669,10 +688,12 @@ def analyze_run_json(
                 deltas.append({
                     "vulnerability_id": vuln_id,
                     "agent": agent_id,
-                    "bandit_high_delta": int(last.get("bandit_high", 0)) - int(first.get("bandit_high", 0)),
-                    "bandit_medium_delta": int(last.get("bandit_medium", 0)) - int(first.get("bandit_medium", 0)),
-                    "bandit_low_delta": int(last.get("bandit_low", 0)) - int(first.get("bandit_low", 0)),
-                    "semgrep_delta": int(last.get("semgrep_findings", 0)) - int(first.get("semgrep_findings", 0)),
+                    "bandit_high_delta": int(last.get("bandit_high") or 0) - int(first.get("bandit_high") or 0),
+                    "bandit_medium_delta": int(last.get("bandit_medium") or 0) - int(first.get("bandit_medium") or 0),
+                    "bandit_low_delta": int(last.get("bandit_low") or 0) - int(first.get("bandit_low") or 0),
+                    "semgrep_error_delta": int(last.get("semgrep_error") or 0) - int(first.get("semgrep_error") or 0),
+                    "semgrep_warning_delta": int(last.get("semgrep_warning") or 0) - int(first.get("semgrep_warning") or 0),
+                    "semgrep_info_delta": int(last.get("semgrep_info") or 0) - int(first.get("semgrep_info") or 0),
                 })
 
             for it in all_iters:

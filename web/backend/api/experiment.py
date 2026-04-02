@@ -143,17 +143,6 @@ async def start_scan(run_id: str, body: ScanBody, db: Session = Depends(get_db))
 
 # ── Analyze (synchronous — fast) ─────────────────────────────────────────────
 
-@router.post("/runs/{run_id}/analyze")
-async def run_analysis(run_id: str, db: Session = Depends(get_db)):
-    run_dir = _REPO_ROOT / "runs" / run_id
-    if not run_dir.exists():
-        raise HTTPException(status_code=404, detail=f"Run directory not found: {run_id}")
-
-    from framework.analyzer import analyze_run_json
-    result = analyze_run_json(run_dir)
-    return result
-
-
 @router.get("/runs/{run_id}/analysis")
 async def get_analysis(run_id: str):
     run_dir = _REPO_ROOT / "runs" / run_id
@@ -240,6 +229,122 @@ async def start_nuclei_rescan(body: NucleiRescanBody):
 
     info = process_manager.spawn(ws_id, cmd)
     return {"run_id": ws_id, "pid": info.pid, "status": "started", "command": info.command}
+
+
+# ── Baseline scan ─────────────────────────────────────────────────────────────
+
+class BaselineScanBody(BaseModel):
+    snippet: Optional[str] = None
+    base_code_dir: Optional[str] = None
+    semgrep_config: Optional[str] = None
+    config: str = "config/config.yaml"
+
+
+@router.post("/scan/baseline")
+async def start_baseline_scan(body: BaselineScanBody, db: Session = Depends(get_db)):
+    target = body.snippet or body.base_code_dir
+    if not target:
+        raise HTTPException(
+            status_code=400, detail="Provide 'snippet' or 'base_code_dir'"
+        )
+
+    run_id = f"baseline-{_make_run_id()}"
+
+    cmd = [_PYTHON, "utils/scan.py", "--baseline-scan", "--config", body.config]
+    if body.snippet:
+        cmd += ["--snippet", body.snippet]
+    elif body.base_code_dir:
+        cmd += ["--base-code-dir", body.base_code_dir]
+    if body.semgrep_config:
+        cmd += ["--semgrep-config", body.semgrep_config]
+
+    run = Run(id=run_id, status="scanning", started_at=datetime.now().isoformat())
+    db.merge(run)
+    db.commit()
+
+    info = process_manager.spawn(run_id, cmd, on_exit=_on_process_exit)
+    return {"run_id": run_id, "pid": info.pid, "status": "started", "command": info.command}
+
+
+# ── Ad-hoc scan ──────────────────────────────────────────────────────────────
+
+class AdhocScanBody(BaseModel):
+    snippet: Optional[str] = None
+    base_code_dir: Optional[str] = None
+    semgrep_config: Optional[str] = None
+    config: str = "config/config.yaml"
+
+
+@router.post("/scan/adhoc")
+async def start_adhoc_scan(body: AdhocScanBody, db: Session = Depends(get_db)):
+    target = body.snippet or body.base_code_dir
+    if not target:
+        raise HTTPException(
+            status_code=400, detail="Provide 'snippet' or 'base_code_dir'"
+        )
+
+    run_id = f"scan-{_make_run_id()}"
+
+    cmd = [_PYTHON, "utils/scan.py", "--adhoc-scan", "--config", body.config]
+    if body.snippet:
+        cmd += ["--snippet", body.snippet]
+    elif body.base_code_dir:
+        cmd += ["--base-code-dir", body.base_code_dir]
+    if body.semgrep_config:
+        cmd += ["--semgrep-config", body.semgrep_config]
+
+    run = Run(id=run_id, status="scanning", started_at=datetime.now().isoformat())
+    db.merge(run)
+    db.commit()
+
+    info = process_manager.spawn(run_id, cmd, on_exit=_on_process_exit)
+    return {"run_id": run_id, "pid": info.pid, "status": "started", "command": info.command}
+
+
+# ── Language detection ────────────────────────────────────────────────────────
+
+_LANG_MAP = {
+    ".py": "python",
+    ".ts": "typescript", ".tsx": "typescript",
+    ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript", ".cjs": "javascript",
+    ".go": "go",
+    ".rs": "rust",
+    ".java": "java",
+    ".rb": "ruby",
+    ".php": "php",
+    ".c": "c", ".h": "c",
+    ".cpp": "cpp", ".cc": "cpp", ".cxx": "cpp", ".hpp": "cpp",
+    ".cs": "csharp",
+    ".swift": "swift",
+    ".kt": "kotlin",
+}
+
+_CODE_EXTS = set(_LANG_MAP.keys())
+
+
+@router.get("/detect-language")
+async def detect_language(path: str):
+    target = Path(path)
+    if not target.exists():
+        target = _REPO_ROOT / path
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"Path not found: {path}")
+
+    counts: dict[str, int] = {}
+    if target.is_file():
+        lang = _LANG_MAP.get(target.suffix.lower(), "unknown")
+        counts[lang] = 1
+    else:
+        for f in target.rglob("*"):
+            if f.is_file() and f.suffix.lower() in _CODE_EXTS:
+                lang = _LANG_MAP.get(f.suffix.lower(), "unknown")
+                counts[lang] = counts.get(lang, 0) + 1
+
+    languages = [
+        {"language": lang, "count": count}
+        for lang, count in sorted(counts.items(), key=lambda x: -x[1])
+    ]
+    return {"languages": languages}
 
 
 # ── Process control ──────────────────────────────────────────────────────────

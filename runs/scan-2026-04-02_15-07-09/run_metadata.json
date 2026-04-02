@@ -1,0 +1,23 @@
+{
+  "run_id": "scan-2026-04-02_15-07-09",
+  "timestamp": "2026-04-02_15-07-09",
+  "mode": "adhoc",
+  "target": "/Users/rseferyan/Documents/tools/Cursor-Projects/Iterative-Research/runs/SQLi-Test/ai-generated-code-snippets",
+  "agents": [
+    "scan"
+  ],
+  "vulnerabilities": [
+    "iteration_0",
+    "iteration_1",
+    "iteration_2",
+    "iteration_3",
+    "iteration_4",
+    "iteration_5",
+    "iteration_6",
+    "iteration_7",
+    "iteration_8",
+    "iteration_9"
+  ],
+  "iterations": 1,
+  "model": "n/a"
+}

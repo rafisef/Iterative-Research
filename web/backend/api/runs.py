@@ -57,6 +57,9 @@ def _result_to_dict(r: Result) -> dict:
         "bandit_medium": r.bandit_medium,
         "bandit_low": r.bandit_low,
         "semgrep_findings": r.semgrep_findings,
+        "semgrep_error": r.semgrep_error,
+        "semgrep_warning": r.semgrep_warning,
+        "semgrep_info": r.semgrep_info,
         "static_log_path": r.static_log_path,
         "bandit_issues": json.loads(r.bandit_issues) if r.bandit_issues else [],
         "semgrep_issues": json.loads(r.semgrep_issues) if r.semgrep_issues else [],
@@ -147,6 +150,9 @@ class ResultUpdateBody(BaseModel):
     bandit_medium: Optional[int] = None
     bandit_low: Optional[int] = None
     semgrep_findings: Optional[int] = None
+    semgrep_error: Optional[int] = None
+    semgrep_warning: Optional[int] = None
+    semgrep_info: Optional[int] = None
     prompt: Optional[str] = None
 
 

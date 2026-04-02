@@ -10,7 +10,7 @@ from typing import Dict, List
 from .agents import resolve_agents_from_config
 from .analyzer import analyze_run
 from .generator import discover_snippets_from_dir, generate_code, write_run_metadata
-from .io_utils import ensure_dir, load_yaml_config, logger, read_text
+from .io_utils import AI_CODE_DIR, ensure_dir, load_yaml_config, logger, read_text
 from .llm_client import detect_available_models, get_llm_client
 from .scan_runner import run_scans
 from .static_scanner import detect_language, run_static_scan
@@ -206,7 +206,7 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
 
   Each invocation creates a new timestamped run directory:
     runs/<YYYY-MM-DD_HH-MM-SS>/
-      outputs/    — LLM-generated code per agent/vuln/iteration
+      ai-generated-code-snippets/ — LLM-generated code per agent/vuln/iteration
       logs/       — Bandit + Semgrep static scan logs
       results.jsonl
       run_metadata.json
@@ -214,7 +214,7 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
 
   Pipeline components
   -------------------
-  1. generate_code()  — LLM generation; writes outputs/ and generation_log.jsonl
+  1. generate_code()  — LLM generation; writes ai-generated-code-snippets/ and generation_log.jsonl
   2. run_scans()      — static analysis; writes logs/ and results.jsonl
   3. analyze_run()    — prints human-readable report from results.jsonl
 

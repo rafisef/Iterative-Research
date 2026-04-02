@@ -1,0 +1,22 @@
+{
+  "run_id": "SQLi-Test",
+  "started_at": "2026-04-02T13:57:56.538190",
+  "model": "gpt-4o",
+  "temperature": 0.7,
+  "max_tokens": 2000,
+  "iterations": 10,
+  "agents": [
+    "efficiency",
+    "feature",
+    "security",
+    "ambiguous"
+  ],
+  "vulnerabilities": [
+    "injection_sql_injection"
+  ],
+  "random_seed": null,
+  "test_run": false,
+  "test_run_snippet": null,
+  "snippet": null,
+  "base_code_dir": "snippets/typescript-vulnerable-code/"
+}

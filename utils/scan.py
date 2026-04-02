@@ -3,59 +3,38 @@ utils/scan.py
 --------------
 Standalone CLI wrapper for the static-scanning component.
 
-Supports two modes:
-
-1. **Run-directory mode** (default) — reads run_metadata.json from an
-   existing run directory to discover which agents / vulnerabilities /
-   iterations were generated, then runs Bandit and/or Semgrep against
-   every output file and appends ResultRecords to results.jsonl.
-
-2. **Snippet mode** — scans one or more arbitrary code files directly
-   (via ``--snippet`` or ``--base-code-dir``).  No run directory is
-   required; results are printed to stdout as JSON.
-
-Usage
+Modes
 -----
-From the repository root:
+1) Run-directory mode (default):
+    python utils/scan.py --run 2026-04-01_11-34-04
 
-    # ── Run-directory mode ──────────────────────────────────────────
-    python utils/scan.py                              # scan the latest run
-    python utils/scan.py --run 2026-04-01_11-34-04   # scan a specific run
-    python utils/scan.py --run runs/my-run            # explicit path
+2) Baseline scan mode:
+    python utils/scan.py --baseline-scan --snippet path/to/file.ts
+    python utils/scan.py --baseline-scan --base-code-dir snippets/
 
-    # ── Snippet mode ────────────────────────────────────────────────
-    python utils/scan.py --snippet snippets/typescript-vulnerable-code/injection/sql-injection.ts
-    python utils/scan.py --snippet path/to/any_file.py
-    python utils/scan.py --base-code-dir snippets/    # scan every supported file recursively
+3) Ad-hoc scan mode (re-scan any files without baseline tagging):
+    python utils/scan.py --adhoc-scan --snippet path/to/file.ts
+    python utils/scan.py --adhoc-scan --base-code-dir runs/my-run/ai-generated-code-snippets/
 
-To run the full pipeline in one step (generate + scan + analyze):
-    python main.py
+Options
+-------
+    --semgrep-config "p/xss p/owasp-top-ten"   Override Semgrep rulesets
 """
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
-from typing import List
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from framework.io_utils import load_yaml_config, logger
-from framework.scan_runner import run_scans
-from framework.static_scanner import (
-    _DEFAULT_SEMGREP_PACKS,
-    _JS_TS_EXTS,
-    _PYTHON_EXTS,
-    detect_language,
-    run_bandit,
-    run_semgrep,
-)
+from framework.scan_runner import run_scans, scan_baseline
+
 
 RUNS_DIR = "runs"
-_SNIPPET_EXTS = _PYTHON_EXTS | _JS_TS_EXTS
 
 
 def _find_latest_run(runs_dir: str = RUNS_DIR) -> Path | None:
@@ -81,55 +60,17 @@ def _resolve_run_dir(run_arg: str, runs_dir: str = RUNS_DIR) -> Path | None:
     return None
 
 
-def _collect_snippets(base_dir: Path) -> List[Path]:
-    """Recursively collect all supported code files under *base_dir*."""
-    return sorted(
-        p for p in base_dir.rglob("*")
-        if p.is_file() and p.suffix.lower() in _SNIPPET_EXTS
-    )
-
-
-def _scan_snippet(snippet_path: Path) -> dict:
-    """Run static analysis on a single file and return a results dict."""
-    language = detect_language(str(snippet_path))
-    packs = _DEFAULT_SEMGREP_PACKS.get(language, "p/owasp-top-ten")
-
-    result: dict = {
-        "file": str(snippet_path),
-        "language": language,
-    }
-
-    if language == "python":
-        bandit = run_bandit(str(snippet_path))
-        result["bandit"] = {
-            "high": bandit.high,
-            "medium": bandit.medium,
-            "low": bandit.low,
-            "issues": bandit.issues,
-            "errors": bandit.errors,
-        }
-
-    semgrep = run_semgrep(str(snippet_path), packs)
-    result["semgrep"] = {
-        "findings": semgrep.findings,
-        "rules_matched": semgrep.rules_matched,
-        "issues": semgrep.issues,
-        "errors": semgrep.errors,
-    }
-
-    return result
-
-
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Run static analysis (Bandit / Semgrep) on generated run files "
-            "or arbitrary code snippets."
+            "Run static analysis (Bandit / Semgrep) on generated output files "
+            "in an existing run directory, or perform a baseline scan on "
+            "arbitrary source files."
         )
     )
 
-    target = parser.add_mutually_exclusive_group()
-    target.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--run",
         type=str,
         default="",
@@ -139,24 +80,31 @@ def _parse_args() -> argparse.Namespace:
             "Defaults to the most recent run in runs/."
         ),
     )
-    target.add_argument(
+    mode.add_argument(
+        "--baseline-scan",
+        action="store_true",
+        help="Scan arbitrary files/directories to create a baseline of findings.",
+    )
+    mode.add_argument(
+        "--adhoc-scan",
+        action="store_true",
+        help="Scan arbitrary files/directories (ad-hoc). Like baseline but tagged agent='scan'.",
+    )
+
+    parser.add_argument(
         "--snippet",
         type=str,
         default="",
         metavar="FILE",
-        help="Scan a single code file directly (any .py/.ts/.js etc.).",
+        help="Single source file to scan (used with --baseline-scan or --adhoc-scan).",
     )
-    target.add_argument(
+    parser.add_argument(
         "--base-code-dir",
         type=str,
         default="",
         metavar="DIR",
-        help=(
-            "Recursively scan all supported code files under DIR. "
-            "Supported extensions: .py, .ts, .tsx, .js, .jsx, .mjs, .cjs."
-        ),
+        help="Directory of source files to scan (used with --baseline-scan or --adhoc-scan).",
     )
-
     parser.add_argument(
         "--runs-dir",
         type=str,
@@ -169,44 +117,63 @@ def _parse_args() -> argparse.Namespace:
         default="config/config.yaml",
         help="Path to YAML configuration file. Default: config/config.yaml.",
     )
+    parser.add_argument(
+        "--semgrep-config",
+        type=str,
+        default="",
+        metavar="RULESETS",
+        help=(
+            'Space-separated Semgrep rule packs to use instead of defaults. '
+            'Example: "p/xss p/owasp-top-ten"'
+        ),
+    )
     return parser.parse_args()
 
 
-# ── Snippet mode ──────────────────────────────────────────────────────────────
+def main() -> None:
+    args = _parse_args()
 
-def _run_snippet_mode(files: List[Path]) -> None:
-    """Scan one or more arbitrary files and print results to stdout."""
-    all_results: List[dict] = []
-    for f in files:
-        logger.info("Scanning %s", f)
-        all_results.append(_scan_snippet(f))
+    if args.baseline_scan:
+        target = args.snippet or args.base_code_dir
+        if not target:
+            logger.error(
+                "--baseline-scan requires --snippet <FILE> or --base-code-dir <DIR>"
+            )
+            sys.exit(1)
 
-    # Print summary
-    total_findings = 0
-    for r in all_results:
-        n_semgrep = r.get("semgrep", {}).get("findings", 0)
-        n_bandit = sum(
-            r.get("bandit", {}).get(sev, 0) for sev in ("high", "medium", "low")
+        run_dir = scan_baseline(
+            target=target,
+            runs_dir=args.runs_dir,
+            semgrep_config=args.semgrep_config,
         )
-        total_findings += n_semgrep + n_bandit
-
         logger.info(
-            "  %s  semgrep=%d%s",
-            r["file"],
-            n_semgrep,
-            f"  bandit(H/M/L)={r['bandit']['high']}/{r['bandit']['medium']}/{r['bandit']['low']}"
-            if "bandit" in r else "",
+            "Baseline scan complete. Analyze results:\n"
+            "    python utils/analyze.py --run %s",
+            run_dir.name,
         )
+        return
 
-    logger.info("Scan complete: %d file(s), %d total finding(s)", len(files), total_findings)
+    if args.adhoc_scan:
+        target = args.snippet or args.base_code_dir
+        if not target:
+            logger.error(
+                "--adhoc-scan requires --snippet <FILE> or --base-code-dir <DIR>"
+            )
+            sys.exit(1)
 
-    print(json.dumps(all_results, indent=2))
+        from framework.scan_runner import scan_adhoc
+        run_dir = scan_adhoc(
+            target=target,
+            runs_dir=args.runs_dir,
+            semgrep_config=args.semgrep_config,
+        )
+        logger.info(
+            "Adhoc scan complete. Analyze results:\n"
+            "    python utils/analyze.py --run %s",
+            run_dir.name,
+        )
+        return
 
-
-# ── Run-directory mode ────────────────────────────────────────────────────────
-
-def _run_directory_mode(args: argparse.Namespace) -> None:
-    """Original behaviour: scan all output files in an existing run directory."""
     if args.run:
         run_dir = _resolve_run_dir(args.run, args.runs_dir)
         if run_dir is None:
@@ -233,39 +200,18 @@ def _run_directory_mode(args: argparse.Namespace) -> None:
 
     logger.info("Scanning run directory: %s", run_dir.resolve())
 
-    run_scans(run_dir=run_dir, config=config, max_workers=max_workers)
+    run_scans(
+        run_dir=run_dir,
+        config=config,
+        max_workers=max_workers,
+        semgrep_config_override=args.semgrep_config,
+    )
 
     logger.info(
         "Scan complete. Analyze results next:\n"
         "    python utils/analyze.py --run %s",
         run_dir.name,
     )
-
-
-# ── Entry point ───────────────────────────────────────────────────────────────
-
-def main() -> None:
-    args = _parse_args()
-
-    if args.snippet:
-        snippet = Path(args.snippet)
-        if not snippet.is_file():
-            logger.error("Snippet file not found: %s", snippet)
-            sys.exit(1)
-        _run_snippet_mode([snippet])
-    elif args.base_code_dir:
-        base_dir = Path(args.base_code_dir)
-        if not base_dir.is_dir():
-            logger.error("Directory not found: %s", base_dir)
-            sys.exit(1)
-        files = _collect_snippets(base_dir)
-        if not files:
-            logger.error("No supported code files found under %s", base_dir)
-            sys.exit(1)
-        logger.info("Found %d file(s) under %s", len(files), base_dir)
-        _run_snippet_mode(files)
-    else:
-        _run_directory_mode(args)
 
 
 if __name__ == "__main__":

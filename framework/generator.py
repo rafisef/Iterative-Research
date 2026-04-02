@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Dict, List
 
 from .agents import Agent
-from .io_utils import ensure_dir, logger, read_text, write_text
+from .io_utils import AI_CODE_DIR, ensure_dir, logger, read_text, write_text
 from .llm_client import get_llm_client
 from .static_scanner import detect_language
 from .vulnerabilities import Vulnerability
@@ -58,7 +58,7 @@ def generate_code(
     Generate LLM code iterations for all agent × vulnerability combinations.
 
     Writes output files to:
-        <run_dir>/outputs/<agent_id>/<vuln_id>/iteration_N.<ext>
+        <run_dir>/ai-generated-code-snippets/<agent_id>/<vuln_id>/iteration_N.<ext>
 
     Writes per-iteration prompt/model info to:
         <run_dir>/generation_log.jsonl
@@ -104,7 +104,7 @@ def generate_code(
 
     llm_cfg = config.get("llm", {})
     active_model = model_override or llm_cfg.get("model", "gpt-4o")
-    outputs_dir = run_dir / "outputs"
+    outputs_dir = run_dir / AI_CODE_DIR
     generation_log_path = run_dir / "generation_log.jsonl"
 
     ensure_dir(outputs_dir)
@@ -235,7 +235,7 @@ def generate_code(
                     for future in as_completed(futures):
                         future.result()
 
-    logger.info("Code generation complete. Outputs: %s/outputs/", run_dir)
+    logger.info("Code generation complete. Outputs: %s/%s/", run_dir, AI_CODE_DIR)
     return run_dir
 
 

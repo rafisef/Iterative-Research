@@ -17,8 +17,13 @@ from .io_utils import ensure_dir, logger
 _PYTHON_EXTS: frozenset[str] = frozenset({".py"})
 _JS_TS_EXTS: frozenset[str] = frozenset({".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"})
 
-# Default Semgrep rule packs per language (space-separated; passed as --config flags).
-_DEFAULT_SEMGREP_PACKS: Dict[str, str] = {
+# Default Semgrep config when no override or per-language packs are selected.
+# "auto" enables Semgrep's built-in auto-detection of relevant rules.
+_DEFAULT_SEMGREP_CONFIG = "auto"
+
+# Per-language rule packs (space-separated; passed as --config flags).
+# Used only when explicitly selected via the UI scanner config sub-menu.
+_LANGUAGE_SEMGREP_PACKS: Dict[str, str] = {
     "python":     "p/python p/bandit p/owasp-top-ten",
     "typescript": "p/typescript p/javascript p/owasp-top-ten",
 }
@@ -57,6 +62,9 @@ class BanditResult:
 @dataclass
 class SemgrepResult:
     findings: int = 0
+    error: int = 0      # ERROR severity — likely vulnerabilities (HIGH)
+    warning: int = 0    # WARNING severity — potential issues (MEDIUM)
+    info: int = 0       # INFO severity — informational (LOW)
     rules_matched: List[str] = field(default_factory=list)
     issues: List[Dict[str, Any]] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
@@ -144,12 +152,13 @@ def _semgrep_binary() -> Optional[str]:
     return shutil.which("semgrep")
 
 
-def run_semgrep(snippet_path: str, semgrep_config: str = "p/xss") -> SemgrepResult:
+def run_semgrep(snippet_path: str, semgrep_config: str = "auto") -> SemgrepResult:
     """
     Run Semgrep using the given rule config(s) and return finding counts plus
     per-finding detail.
 
-    semgrep_config can be space-separated packs (e.g. "p/javascript p/owasp-top-ten").
+    semgrep_config can be space-separated packs (e.g. "p/javascript p/owasp-top-ten")
+    or the special value "auto" which lets Semgrep auto-detect relevant rules.
     Each pack is passed as a separate --config flag to a single invocation.
     """
     binary = _semgrep_binary()
@@ -158,7 +167,7 @@ def run_semgrep(snippet_path: str, semgrep_config: str = "p/xss") -> SemgrepResu
 
     configs = semgrep_config.split()
     if not configs:
-        configs = ["p/xss"]
+        configs = ["auto"]
 
     cmd = [binary]
     for cfg in configs:
@@ -184,12 +193,16 @@ def run_semgrep(snippet_path: str, semgrep_config: str = "p/xss") -> SemgrepResu
         rules_matched = list({r.get("check_id", "unknown") for r in results})
         errors_list = [e.get("message", "") for e in data.get("errors", [])]
 
+        sev_counts = {"ERROR": 0, "WARNING": 0, "INFO": 0}
         issues: List[Dict[str, Any]] = []
         for r in results:
             extra = r.get("extra") or {}
+            sev = (extra.get("severity") or "").upper()
+            if sev in sev_counts:
+                sev_counts[sev] += 1
             issues.append({
                 "rule_id": r.get("check_id", ""),
-                "severity": extra.get("severity", ""),
+                "severity": sev,
                 "message": extra.get("message", ""),
                 "line_number": (r.get("start") or {}).get("line"),
                 "matched_lines": extra.get("lines", "").strip(),
@@ -197,6 +210,9 @@ def run_semgrep(snippet_path: str, semgrep_config: str = "p/xss") -> SemgrepResu
 
         return SemgrepResult(
             findings=len(results),
+            error=sev_counts["ERROR"],
+            warning=sev_counts["WARNING"],
+            info=sev_counts["INFO"],
             rules_matched=rules_matched,
             issues=issues,
             errors=errors_list,
@@ -237,7 +253,7 @@ def run_static_scan(
     effective_semgrep_packs = (
         semgrep_config_override
         if semgrep_config_override
-        else _DEFAULT_SEMGREP_PACKS.get(language, "p/owasp-top-ten")
+        else _DEFAULT_SEMGREP_CONFIG
     )
 
     bandit_result = BanditResult()
@@ -260,7 +276,11 @@ def run_static_scan(
         if semgrep_result.errors:
             logger.warning("Semgrep errors: %s", semgrep_result.errors)
         else:
-            logger.info("Semgrep results: findings=%d rules=%s", semgrep_result.findings, semgrep_result.rules_matched)
+            logger.info(
+                "Semgrep results: findings=%d (ERROR=%d WARNING=%d INFO=%d) rules=%s",
+                semgrep_result.findings, semgrep_result.error, semgrep_result.warning,
+                semgrep_result.info, semgrep_result.rules_matched,
+            )
 
     agent_log_dir = Path(logs_dir) / agent / vulnerability_id
     ensure_dir(agent_log_dir)
@@ -277,7 +297,9 @@ def run_static_scan(
             "issues": bandit_result.issues, "errors": bandit_result.errors,
         },
         "semgrep": {
-            "findings": semgrep_result.findings, "rules_matched": semgrep_result.rules_matched,
+            "findings": semgrep_result.findings,
+            "error": semgrep_result.error, "warning": semgrep_result.warning, "info": semgrep_result.info,
+            "rules_matched": semgrep_result.rules_matched,
             "issues": semgrep_result.issues, "errors": semgrep_result.errors,
         },
     }

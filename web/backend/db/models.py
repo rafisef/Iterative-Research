@@ -47,6 +47,9 @@ class Result(Base):
     bandit_medium = Column(Integer, default=0)
     bandit_low = Column(Integer, default=0)
     semgrep_findings = Column(Integer, default=0)
+    semgrep_error = Column(Integer, default=0)
+    semgrep_warning = Column(Integer, default=0)
+    semgrep_info = Column(Integer, default=0)
     static_log_path = Column(String, nullable=True)
     bandit_issues = Column(Text, nullable=True)   # JSON list
     semgrep_issues = Column(Text, nullable=True)  # JSON list

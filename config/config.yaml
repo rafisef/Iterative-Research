@@ -38,7 +38,7 @@ experiment:
     - ambiguous
   # Set a fixed integer seed for reproducible prompt selection across runs.
   # Remove or set to null to use non-deterministic (random) selection.
-  random_seed: 42
+  random_seed: null
   # Maximum number of worker threads used to process agents in parallel for
   # each iteration. Set to 1 to run everything sequentially.
   max_workers: 4

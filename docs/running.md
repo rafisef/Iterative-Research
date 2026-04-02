@@ -275,29 +275,34 @@ python utils/generate.py --base-code-dir snippets/python/          # all Python 
 python utils/generate.py --base-code-dir snippets/                 # all languages
 ```
 
-Outputs are written to `runs/<run-id>/outputs/`. A `run_metadata.json` and `generation_log.jsonl` are also written to the run directory.
+Outputs are written to `runs/<run-id>/ai-generated-code-snippets/`. A `run_metadata.json` and `generation_log.jsonl` are also written to the run directory.
 
 > **`--base-code-dir`** recursively discovers every supported snippet file (`.py`, `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`) under the given directory. Each file is treated as its own vulnerability; the ID is derived from its path relative to `DIR` (e.g. `injection/xss_base.py` → `injection_xss_base`). This makes it easy to run generation over an entire snippet library in one command.
 
 ### Component 2 — Static Scanning
 
-Scan an existing run directory **or** arbitrary code snippets directly.
+Run Bandit / Semgrep against all generated output files in an existing run directory. Reads `run_metadata.json` to discover what to scan.
 
 ```bash
-# ── Run-directory mode (reads run_metadata.json) ─────────────────
 python utils/scan.py                              # scan the latest run
 python utils/scan.py --run 2026-04-01_11-34-04   # scan a specific run
 python utils/scan.py --run runs/my-run            # explicit path
-
-# ── Snippet mode (scan any file directly, results printed as JSON) ─
-python utils/scan.py --snippet snippets/typescript-vulnerable-code/injection/sql-injection.ts
-python utils/scan.py --snippet path/to/any_file.py
-python utils/scan.py --base-code-dir snippets/    # scan every supported file recursively
+python utils/scan.py --semgrep-config "p/xss p/owasp-top-ten"   # override Semgrep rulesets
 ```
 
-In **run-directory mode**, results are appended to `runs/<run-id>/results.jsonl`.
+Results are appended to `runs/<run-id>/results.jsonl`.
 
-In **snippet mode**, no run directory is required — the scanner auto-detects the language from the file extension, applies the appropriate tools (Bandit for Python, Semgrep for all languages), and prints structured JSON results to stdout.
+#### Baseline Scan Mode
+
+Scan arbitrary source files or directories to create a baseline of findings — no prior code generation run is needed.
+
+```bash
+python utils/scan.py --baseline-scan --snippet path/to/file.ts
+python utils/scan.py --baseline-scan --base-code-dir snippets/
+python utils/scan.py --baseline-scan --snippet myapp.py --semgrep-config "p/python p/bandit"
+```
+
+A standard run directory (`runs/baseline-<timestamp>/`) is created with `run_metadata.json` and `results.jsonl`, so baseline results appear alongside regular experiments and are analyzable with `utils/analyze.py`.
 
 ### Component 3 — Analysis
 
@@ -416,7 +421,7 @@ Scanners           test run — auto-detected  snippet=snippets/typescript/leaka
 
 ## Resuming a Partial Run
 
-The runner does not currently support explicit resume. However, because output files are saved incrementally (`runs/<run-id>/outputs/<agent>/<vuln>/iteration_<N>.py` or `.ts`), you can:
+The runner does not currently support explicit resume. However, because output files are saved incrementally (`runs/<run-id>/ai-generated-code-snippets/<agent>/<vuln>/iteration_<N>.py` or `.ts`), you can:
 
 1. Use `--iterations` to set only the remaining count.
 2. Ensure the previously generated iteration files are in place so the runner reads `iteration_{N-1}` as input for iteration N.
