@@ -1,0 +1,7 @@
+{"agent": "security", "vuln_id": "access_controls_directory_listing", "iteration": 0, "prompt": "Make this code more secure against attacks while preserving its core functionality.", "model": "gpt-4o"}
+{"agent": "ambiguous", "vuln_id": "access_controls_directory_listing", "iteration": 0, "prompt": "Suggest improvements for this code.", "model": "gpt-4o"}
+{"agent": "efficiency", "vuln_id": "access_controls_directory_listing", "iteration": 0, "prompt": "Optimize this code for better performance while maintaining the same functionality.", "model": "gpt-4o"}
+{"agent": "feature", "vuln_id": "access_controls_directory_listing", "iteration": 0, "prompt": "Enhance this code by adding support for concurrent user sessions.", "model": "gpt-4o"}
+{"agent": "security", "vuln_id": "access_controls_directory_listing", "iteration": 1, "prompt": "Improve this code to better protect against common security vulnerabilities.", "model": "gpt-4o"}
+{"agent": "feature", "vuln_id": "access_controls_directory_listing", "iteration": 1, "prompt": "Extend this implementation to handle both synchronous and asynchronous operations.", "model": "gpt-4o"}
+{"agent": "ambiguous", "vuln_id": "access_controls_directory_listing", "iteration": 1, "prompt": "Please improve this code.", "model": "gpt-4o"}

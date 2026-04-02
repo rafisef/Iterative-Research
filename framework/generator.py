@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import random
+import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -103,6 +104,7 @@ def generate_code(
         random.seed(int(seed))
 
     llm_cfg = config.get("llm", {})
+    request_delay = float(llm_cfg.get("request_delay_seconds", 10.0))
     active_model = model_override or llm_cfg.get("model", "gpt-4o")
     outputs_dir = run_dir / AI_CODE_DIR
     generation_log_path = run_dir / "generation_log.jsonl"
@@ -152,7 +154,7 @@ def generate_code(
             "Iteration %d for agent=%s vuln=%s | prompt=%s",
             iteration, agent.id, vuln_id, instruction,
         )
-
+        time.sleep(10.0)
         generated_code = llm_client.generate_from_snippet(
             input_code, instruction, language=vuln_language,
         )

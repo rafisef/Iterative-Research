@@ -1,0 +1,16 @@
+{
+  "run_id": "baseline-2026-04-02_15-56-57",
+  "timestamp": "2026-04-02_15-56-57",
+  "mode": "baseline",
+  "target": "/Users/rseferyan/Documents/tools/Cursor-Projects/Iterative-Research/snippets/typescript-vulnerable-code",
+  "agents": [
+    "baseline"
+  ],
+  "vulnerabilities": [
+    "directory-listing",
+    "sql-injection",
+    "rce"
+  ],
+  "iterations": 1,
+  "model": "n/a"
+}
