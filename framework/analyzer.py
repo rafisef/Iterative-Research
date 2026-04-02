@@ -583,3 +583,113 @@ def write_csv(
     print(f"\n[info] CSV written to: {output_path}")
     print(f"[info] Format: one row per finding (empty finding columns = no findings that iteration)")
     logger.info("CSV written to %s", output_path)
+
+
+# ---------------------------------------------------------------------------
+# JSON output (for web API consumption)
+# ---------------------------------------------------------------------------
+
+def analyze_run_json(
+    run_dir: Path,
+    *,
+    vuln_filter: str | None = None,
+    agent_filter: str | None = None,
+) -> Dict[str, Any]:
+    """
+    Return the same analysis data as ``analyze_run()`` but as structured
+    dicts/lists suitable for JSON serialization via the web API.
+
+    The existing ``analyze_run()`` continues to print to stdout for CLI use;
+    this function returns data without side effects.
+    """
+    results_path = str(run_dir / "results.jsonl")
+    if not Path(results_path).exists():
+        return {"error": "no_results", "message": f"No results.jsonl found in {run_dir}"}
+
+    records = load_results(results_path)
+    if not records:
+        return {"error": "empty_results", "message": "results.jsonl exists but has no records"}
+
+    agents_set = sorted({r.get("agent", "?") for r in records})
+    vulns_set = sorted({r.get("vulnerability_id", "?") for r in records})
+    models_set = sorted({r.get("model", "?") for r in records})
+    iters_set = sorted({r.get("iteration", -1) for r in records})
+    run_ids = sorted({r.get("run_id", "") for r in records if r.get("run_id")})
+
+    meta = _load_metadata(run_dir)
+
+    summary = {
+        "run_id": run_ids[0] if run_ids else None,
+        "results_path": results_path,
+        "total_records": len(records),
+        "agents": agents_set,
+        "vulnerabilities": vulns_set,
+        "models": models_set,
+        "iteration_range": [min(iters_set), max(iters_set)] if iters_set else [],
+        "distinct_iterations": len(iters_set),
+        "has_static_scans": any(r.get("bandit_high") is not None for r in records),
+        "has_nuclei_scans": any(r.get("nuclei_exit_code") is not None for r in records),
+        "random_seed": meta.get("random_seed") if meta else None,
+        "started_at": meta.get("started_at") if meta else None,
+    }
+
+    grouped = group_records(records, filter_agent=agent_filter, filter_vuln=vuln_filter)
+
+    trends: List[Dict[str, Any]] = []
+    deltas: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+
+    for vuln_id, agents_data in sorted(grouped.items()):
+        for agent_id, iterations in sorted(agents_data.items()):
+            if not iterations:
+                continue
+            all_iters = sorted(iterations.keys())
+
+            trend_rows = []
+            for it in all_iters:
+                rec = iterations[it]
+                trend_rows.append({
+                    "iteration": it,
+                    "bandit_high": rec.get("bandit_high", 0),
+                    "bandit_medium": rec.get("bandit_medium", 0),
+                    "bandit_low": rec.get("bandit_low", 0),
+                    "semgrep_findings": rec.get("semgrep_findings", 0),
+                    "prompt": (rec.get("prompt") or "")[:80],
+                    "model": rec.get("model", "?"),
+                })
+            trends.append({
+                "vulnerability_id": vuln_id,
+                "agent": agent_id,
+                "rows": trend_rows,
+            })
+
+            if len(all_iters) >= 2:
+                first = iterations[all_iters[0]]
+                last = iterations[all_iters[-1]]
+                deltas.append({
+                    "vulnerability_id": vuln_id,
+                    "agent": agent_id,
+                    "bandit_high_delta": int(last.get("bandit_high", 0)) - int(first.get("bandit_high", 0)),
+                    "bandit_medium_delta": int(last.get("bandit_medium", 0)) - int(first.get("bandit_medium", 0)),
+                    "bandit_low_delta": int(last.get("bandit_low", 0)) - int(first.get("bandit_low", 0)),
+                    "semgrep_delta": int(last.get("semgrep_findings", 0)) - int(first.get("semgrep_findings", 0)),
+                })
+
+            for it in all_iters:
+                rec = iterations[it]
+                b_issues, s_issues = _get_issues(rec)
+                if b_issues or s_issues:
+                    findings.append({
+                        "vulnerability_id": vuln_id,
+                        "agent": agent_id,
+                        "iteration": it,
+                        "bandit_issues": b_issues,
+                        "semgrep_issues": s_issues,
+                    })
+
+    return {
+        "summary": summary,
+        "trends": trends,
+        "deltas": deltas,
+        "findings": findings,
+    }

@@ -16,6 +16,7 @@ litellm.suppress_debug_info = True
 PROVIDER_DEFAULTS: List[tuple[str, str]] = [
     ("OPENAI_API_KEY",     "gpt-4o"),
     ("ANTHROPIC_API_KEY",  "anthropic/claude-3-5-sonnet-20241022"),
+    ("GEMINI_API_KEY",     "gemini/gemini-2.0-flash"),
     ("GROQ_API_KEY",       "groq/llama-3.3-70b-versatile"),
     ("TOGETHERAI_API_KEY", "together_ai/meta-llama/Llama-3-70b-chat-hf"),
 ]
@@ -85,6 +86,7 @@ class LiteLLMClientImpl:
             ("o3", "OPENAI_API_KEY"),
             ("groq/", "GROQ_API_KEY"),
             ("anthropic/", "ANTHROPIC_API_KEY"),
+            ("gemini/", "GEMINI_API_KEY"),
             ("together_ai/", "TOGETHERAI_API_KEY"),
         ]
         for prefix, env_var in checks:

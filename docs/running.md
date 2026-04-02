@@ -33,7 +33,11 @@ When using `--model all`, the runner automatically detects which keys are presen
 
 ### Static Analysis Tools
 
-The framework runs **Bandit** and **Semgrep** as static analysis backends. These are installed automatically via `pip install -r requirements.txt` — no separate installation is required.
+The framework runs **Bandit** and **Semgrep** as static analysis backends.
+
+**Bandit** is installed in the main virtual environment via `pip install -r requirements.txt`.
+
+**Semgrep** is installed in a **separate virtual environment** at `~/.venvs/semgrep-env/` to avoid dependency conflicts (Semgrep pins an older version of pydantic that clashes with FastAPI). The framework automatically invokes the isolated binary — no manual path configuration is needed.
 
 Scanner selection is **automatic** — no configuration needed. The framework detects the programming language from each snippet's file extension and applies the appropriate tools:
 
@@ -54,29 +58,40 @@ Default Semgrep rule packs are chosen per language. Individual vulnerabilities c
 # Navigate to the repository root
 cd Iterative-Research
 
-# Create a virtual environment
+# 1. Create & install the main virtual environment
 python3 -m venv ai-research-env
-
-# Activate it
 source ai-research-env/bin/activate
-
-# Install Python dependencies
 pip install -r requirements.txt
+
+# 2. Create the isolated Semgrep virtual environment
+python3 -m venv ~/.venvs/semgrep-env
+~/.venvs/semgrep-env/bin/pip install semgrep
 ```
 
-**Dependencies installed:**
+The framework automatically discovers the Semgrep binary at `~/.venvs/semgrep-env/bin/semgrep` — no PATH changes or activation are needed.
+
+**Main venv dependencies (`ai-research-env`):**
 
 
-| Package    | Version constraint | Purpose                                              |
-| ---------- | ------------------ | ---------------------------------------------------- |
-| `litellm`  | `==1.82.4`         | Multi-provider LLM client                            |
-| `openai`   | `>=1.0.0`          | OpenAI SDK (used by LiteLLM)                         |
-| `PyYAML`   | `>=6.0`            | YAML config loading                                  |
-| `Flask`    | `>=3.0.0`          | Web framework used by generated Python snippets      |
-| `gunicorn` | `>=21.2.0`         | WSGI server (available to generated Python snippets) |
-| `requests` | `>=2.31.0`         | Health check polling in `server_runner.py`           |
-| `bandit`   | `>=1.7.0`          | Static analysis for Python snippets                  |
-| `semgrep`  | `>=1.0.0`          | Static analysis for all languages                    |
+| Package      | Version constraint   | Purpose                                              |
+| ------------ | -------------------- | ---------------------------------------------------- |
+| `litellm`    | `==1.82.4`           | Multi-provider LLM client                            |
+| `openai`     | `>=1.0.0`            | OpenAI SDK (used by LiteLLM)                         |
+| `PyYAML`     | `>=6.0`              | YAML config loading                                  |
+| `Flask`      | `>=3.0.0`            | Web framework used by generated Python snippets      |
+| `gunicorn`   | `>=21.2.0`           | WSGI server (available to generated Python snippets)  |
+| `requests`   | `>=2.31.0`           | Health check polling in `server_runner.py`            |
+| `bandit`     | `>=1.7.0`            | Static analysis for Python snippets                  |
+| `fastapi`    | `>=0.115.0`          | Web UI backend                                       |
+| `uvicorn`    | `>=0.32.0`           | ASGI server for FastAPI                              |
+| `sqlalchemy` | `>=2.0.0`            | ORM / database layer                                 |
+
+**Isolated venv (`~/.venvs/semgrep-env`):**
+
+
+| Package   | Purpose                             |
+| --------- | ----------------------------------- |
+| `semgrep` | Static analysis for all languages   |
 
 
 ---
@@ -266,15 +281,23 @@ Outputs are written to `runs/<run-id>/outputs/`. A `run_metadata.json` and `gene
 
 ### Component 2 — Static Scanning
 
-Run Bandit / Semgrep against all generated output files in an existing run directory. Reads `run_metadata.json` to discover what to scan.
+Scan an existing run directory **or** arbitrary code snippets directly.
 
 ```bash
+# ── Run-directory mode (reads run_metadata.json) ─────────────────
 python utils/scan.py                              # scan the latest run
 python utils/scan.py --run 2026-04-01_11-34-04   # scan a specific run
 python utils/scan.py --run runs/my-run            # explicit path
+
+# ── Snippet mode (scan any file directly, results printed as JSON) ─
+python utils/scan.py --snippet snippets/typescript-vulnerable-code/injection/sql-injection.ts
+python utils/scan.py --snippet path/to/any_file.py
+python utils/scan.py --base-code-dir snippets/    # scan every supported file recursively
 ```
 
-Results are appended to `runs/<run-id>/results.jsonl`.
+In **run-directory mode**, results are appended to `runs/<run-id>/results.jsonl`.
+
+In **snippet mode**, no run directory is required — the scanner auto-detects the language from the file extension, applies the appropriate tools (Bandit for Python, Semgrep for all languages), and prints structured JSON results to stdout.
 
 ### Component 3 — Analysis
 

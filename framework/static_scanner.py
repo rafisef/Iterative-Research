@@ -121,9 +121,23 @@ def run_bandit(snippet_path: str) -> BanditResult:
 # Semgrep (all languages)
 # ---------------------------------------------------------------------------
 
+_SEMGREP_VENV = Path.home() / ".venvs" / "semgrep-env"
+
+
 def _semgrep_binary() -> Optional[str]:
-    """Return the semgrep executable path, or None if not found."""
+    """
+    Return the semgrep executable path, or None if not found.
+
+    Search order:
+      1. Isolated semgrep venv at ~/.venvs/semgrep-env/bin/semgrep
+      2. Current virtualenv's bin/
+      3. System PATH
+    """
     import shutil
+
+    isolated = _SEMGREP_VENV / "bin" / "semgrep"
+    if isolated.exists():
+        return str(isolated)
     venv_semgrep = Path(sys.executable).parent / "semgrep"
     if venv_semgrep.exists():
         return str(venv_semgrep)

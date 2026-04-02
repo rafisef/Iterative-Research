@@ -1,0 +1,22 @@
+{
+  "run_id": "SQL-Generate-Test",
+  "started_at": "2026-04-01T22:19:34.828110",
+  "model": "gpt-4o",
+  "temperature": 0.7,
+  "max_tokens": 2000,
+  "iterations": 5,
+  "agents": [
+    "efficiency",
+    "feature",
+    "security",
+    "ambiguous"
+  ],
+  "vulnerabilities": [
+    "sql-injection"
+  ],
+  "random_seed": 42,
+  "test_run": false,
+  "test_run_snippet": null,
+  "snippet": "snippets/vulnerable-code/injection/sql-injection.ts",
+  "base_code_dir": null
+}
