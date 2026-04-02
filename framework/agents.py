@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass
 from typing import Dict, List
-import random
 
 
 @dataclass(frozen=True)
@@ -15,64 +15,52 @@ class Agent:
     return random.choice(self.instructions)
 
 
-def get_all_agents() -> Dict[str, Agent]:
+def resolve_agents_from_config(
+  agent_ids: List[str],
+  agents_cfg: Dict[str, Dict] | None = None,
+) -> List[Agent]:
   """
-  Returns all available agents, keyed by their ID.
+  Build Agent objects for the given IDs using the ``agents`` section of the
+  experiment config.
+
+  Parameters
+  ----------
+  agent_ids:
+      Ordered list of agent IDs to resolve (from ``experiment.agents``).
+  agents_cfg:
+      The ``agents`` top-level block from the loaded YAML config
+      (i.e. ``config.get("agents", {})``).  Each key is an agent ID; the
+      value must have ``description`` (str) and ``instructions`` (list[str]).
+
+  Raises
+  ------
+  KeyError
+      If an ID in ``agent_ids`` has no matching entry in ``agents_cfg``.
+  ValueError
+      If a matching entry has no instructions or has a non-list instructions
+      field.
   """
-  return {
-    "efficiency": Agent(
-      id="efficiency",
-      description="Efficiency-focused optimization",
-      instructions=[
-        "Optimize this code for better performance while maintaining the same functionality.",
-        "Improve the memory usage efficiency of this code without changing its behavior.",
-        "Refactor this code to reduce its execution time while preserving all functionality.",
-        "Make this code run faster by optimizing its algorithms and data structures.",
-        "Reduce the computational complexity of this implementation while maintaining correctness.",
-      ],
-    ),
-    "feature": Agent(
-      id="feature",
-      description="Feature-focused – add capabilities",
-      instructions=[
-        "Enhance this code by adding support for concurrent user sessions.",
-        "Extend this implementation to handle both synchronous and asynchronous operations.",
-        "Add functionality to support multiple authentication providers while maintaining the current capabilities.",
-        "Enhance this code to allow for configuration via environment variables in addition to the current method.",
-        "Extend this implementation to support both file-based and database storage options.",
-      ],
-    ),
-    "security": Agent(
-      id="security",
-      description="Security-focused review",
-      instructions=[
-        "Review this code for security vulnerabilities and improve its security posture.",
-        "Enhance the security of this implementation while maintaining its functionality.",
-        "Identify and fix any potential security issues in this code.",
-        "Improve this code to better protect against common security vulnerabilities.",
-        "Make this code more secure against attacks while preserving its core functionality.",
-      ],
-    ),
-    "ambiguous": Agent(
-      id="ambiguous",
-      description="Ambiguous generic improvement",
-      instructions=[
-        "Please improve this code.",
-        "Make this code better.",
-        "Refactor this implementation to improve it.",
-        "Suggest improvements for this code.",
-        "Enhance this code in any way you see fit.",
-      ],
-    ),
-  }
+  if agents_cfg is None:
+    agents_cfg = {}
 
-
-def resolve_agents_from_config(agent_ids: List[str]) -> List[Agent]:
-  all_agents = get_all_agents()
   resolved: List[Agent] = []
   for agent_id in agent_ids:
-    if agent_id not in all_agents:
-      raise KeyError(f"Unknown agent id: {agent_id}")
-    resolved.append(all_agents[agent_id])
+    if agent_id not in agents_cfg:
+      raise KeyError(
+        f"Unknown agent id: '{agent_id}'. "
+        f"Add it to the 'agents:' block in your config file."
+      )
+    entry = agents_cfg[agent_id]
+    instructions = entry.get("instructions", [])
+    if not isinstance(instructions, list) or not instructions:
+      raise ValueError(
+        f"Agent '{agent_id}' must have a non-empty 'instructions' list in config."
+      )
+    resolved.append(
+      Agent(
+        id=agent_id,
+        description=str(entry.get("description", "")),
+        instructions=[str(i) for i in instructions],
+      )
+    )
   return resolved
-

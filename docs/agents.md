@@ -133,42 +133,42 @@ This structure ensures:
 
 ## How Agents Are Resolved
 
-Agents are registered in `get_all_agents()` in `framework/agents.py` and resolved from config by `resolve_agents_from_config()`:
+Agents are defined entirely in `config/config.yaml` under the top-level `agents:` block. The runner reads this section and builds `Agent` objects via `resolve_agents_from_config()`:
 
 ```python
-def resolve_agents_from_config(agent_ids: List[str]) -> List[Agent]:
-    all_agents = get_all_agents()
-    resolved = []
+def resolve_agents_from_config(
+    agent_ids: List[str],
+    agents_cfg: Dict[str, Dict] | None = None,
+) -> List[Agent]:
     for agent_id in agent_ids:
-        if agent_id not in all_agents:
-            raise KeyError(f"Unknown agent id: {agent_id}")
-        resolved.append(all_agents[agent_id])
-    return resolved
+        if agent_id not in agents_cfg:
+            raise KeyError(f"Unknown agent id: '{agent_id}'. Add it to the 'agents:' block in your config file.")
+        ...
 ```
 
-If any ID in `config.yaml` does not match a registered agent, the runner raises a `KeyError` at startup before any API calls are made.
+If any ID listed under `experiment.agents` does not have a matching entry in the `agents:` block, the runner raises a `KeyError` at startup before any API calls are made.
 
 ---
 
 ## Adding a New Agent
 
-1. Open `framework/agents.py` and add a new entry to the dictionary returned by `get_all_agents()`:
+Everything is in `config/config.yaml` — no Python changes needed.
 
-```python
-"readability": Agent(
-    id="readability",
-    description="Readability-focused refactoring",
-    instructions=[
-        "Refactor this code to improve its readability and maintainability.",
-        "Rewrite this code so it is easier for a junior developer to understand.",
-        "Simplify this code by reducing nesting and improving naming conventions.",
-        "Improve the documentation and structure of this code for better readability.",
-        "Make this code cleaner and more self-documenting.",
-    ],
-),
+1. Add an entry to the top-level `agents:` block:
+
+```yaml
+agents:
+  readability:
+    description: "Readability-focused refactoring"
+    instructions:
+      - "Refactor this code to improve its readability and maintainability."
+      - "Rewrite this code so it is easier for a junior developer to understand."
+      - "Simplify this code by reducing nesting and improving naming conventions."
+      - "Improve the documentation and structure of this code for better readability."
+      - "Make this code cleaner and more self-documenting."
 ```
 
-2. Add the agent ID to the `agents` list in `config/config.yaml`:
+2. Add the agent ID to `experiment.agents`:
 
 ```yaml
 experiment:

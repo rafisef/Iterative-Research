@@ -159,7 +159,6 @@ experiment:
     - feature
     - security
     - ambiguous
-  dry_run: false         # true = generate code only; skip servers and all scans
   random_seed: 42        # Fixed seed for reproducible prompt selection. Remove for random.
   run_nuclei: false      # true = start servers and run Nuclei after static scans
   max_workers: 4         # Parallel agent threads per iteration (1 = sequential)
@@ -194,7 +193,7 @@ paths:
 **Key configuration notes:**
 
 - `iterations` — The paper used 10 iterations (40 rounds total across 4 agents). Start with 3 to verify your setup.
-- `dry_run: true` — Generates code and saves snippets but skips all scanning. Useful for testing LLM connectivity.
+- To verify LLM connectivity without running a full experiment, use `python utils/test_llm_connectivity.py`.
 - `random_seed` — Ensures the same prompt variant is picked for a given agent/iteration across re-runs. Remove the key or set to `null` for non-deterministic selection.
 - `run_nuclei: false` — The default. Static analysis (Bandit + Semgrep) runs on every iteration without a server. Set to `true` only when you need dynamic scanning during the main experiment loop.
 - `max_workers` — Set to `1` for fully sequential execution (easier to debug). The default `4` processes all agents in parallel within each iteration.
@@ -213,14 +212,11 @@ python -m framework.runner
 # Override config file
 python -m framework.runner --config path/to/other-config.yaml
 
-# Generate code only — no servers, no scans
-python -m framework.runner --dry-run
+# Verify LLM connectivity (no files written)
+python utils/test_llm_connectivity.py
 
 # Skip Nuclei but still run static analysis (Bandit + Semgrep)
-python -m framework.runner --skip-nuclei
-
-# Skip static analysis (Bandit + Semgrep) — useful if you only want Nuclei
-python -m framework.runner --skip-static
+python main.py --skip-nuclei
 
 # Assign a custom run ID instead of the auto-generated timestamp
 python -m framework.runner --run-id my-experiment-v1
@@ -234,7 +230,6 @@ python -m framework.runner --log my-run
 | Flag | Description |
 |---|---|
 | `--config <path>` | Path to YAML config file (default: `config/config.yaml`) |
-| `--dry-run` | Generate code snippets only; skip server launch and all scans |
 | `--skip-nuclei` | Start servers but skip Nuclei scans |
 | `--skip-static` | Skip Bandit and Semgrep static analysis |
 | `--run-id <name>` | Override auto-generated timestamp run ID |
@@ -439,7 +434,6 @@ A JSON snapshot of the configuration at the time the run was started — useful 
   "vulnerabilities": ["injection_xss_comment_page"],
   "random_seed": 42,
   "run_nuclei": false,
-  "dry_run": false,
   "scanner_backends": ["bandit", "semgrep"],
   "semgrep_config": "p/xss"
 }
@@ -499,7 +493,7 @@ The base snippet (`xss_comment_page_base.py`) is a deliberately secure starting 
 
 ### Adding a new agent
 
-Add a new `Agent` entry to the dictionary returned by `get_all_agents()` in `framework/agents.py`, then include its ID in the `agents` list in `config/config.yaml`.
+Add a new entry to the `agents:` block in `config/config.yaml` (with `description` and `instructions`), then include its ID in `experiment.agents`. No Python changes are needed.
 
 ### Switching LLM providers
 

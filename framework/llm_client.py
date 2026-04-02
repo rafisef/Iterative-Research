@@ -11,13 +11,27 @@ from .io_utils import load_yaml_config, logger
 # Silence LiteLLM's verbose startup banners in library mode.
 litellm.suppress_debug_info = True
 
+# Canonical provider registry: (env_var, default_model_string).
+# Order determines display priority when --model all is used.
+PROVIDER_DEFAULTS: List[tuple[str, str]] = [
+    ("OPENAI_API_KEY",     "gpt-4o"),
+    ("ANTHROPIC_API_KEY",  "anthropic/claude-3-5-sonnet-20241022"),
+    ("GROQ_API_KEY",       "groq/llama-3.3-70b-versatile"),
+    ("TOGETHERAI_API_KEY", "together_ai/meta-llama/Llama-3-70b-chat-hf"),
+]
+
+
+def detect_available_models() -> List[str]:
+    """Return the default model string for every provider whose API key is set in the environment."""
+    return [model for env_var, model in PROVIDER_DEFAULTS if os.getenv(env_var)]
+
 
 class LLMClient(Protocol):
     """
     Minimal interface used by the experiment runner.
     """
 
-    def generate_from_snippet(self, snippet: str, agent_instruction: str) -> str:  # pragma: no cover - interface
+    def generate_from_snippet(self, snippet: str, agent_instruction: str, language: str = "python") -> str:  # pragma: no cover - interface
         ...
 
 
@@ -48,12 +62,12 @@ class LiteLLMClientImpl:
       - Ollama:    none (local)
     """
 
-    def __init__(self, config_path: str = "config/config.yaml") -> None:
+    def __init__(self, config_path: str = "config/config.yaml", model_override: Optional[str] = None) -> None:
         cfg = load_yaml_config(config_path)
         llm_cfg = cfg.get("llm", {})
 
         self._config = LLMConfig(
-            model=llm_cfg.get("model", "gpt-4o"),
+            model=model_override or llm_cfg.get("model", "gpt-4o"),
             temperature=float(llm_cfg.get("temperature", 0.7)),
             max_tokens=int(llm_cfg.get("max_tokens", 2000)),
             top_p=float(llm_cfg.get("top_p", 1.0)) if llm_cfg.get("top_p") is not None else None,
@@ -82,25 +96,41 @@ class LiteLLMClientImpl:
                 )
                 return
 
-    def _build_messages(self, snippet: str, agent_instruction: str) -> List[Dict[str, str]]:
+    def _build_messages(self, snippet: str, agent_instruction: str, language: str = "python") -> List[Dict[str, str]]:
+        lang = language.lower()
+        if lang == "typescript":
+            fence = "typescript"
+            requirements = (
+                "Important requirements:\n"
+                "- The result MUST be a single TypeScript module (.ts) — do not add an entry point or server boilerplate unless it already exists in the snippet.\n"
+                "- Preserve all existing type annotations; add stricter types where appropriate.\n"
+                "- Do not include any explanations, prose, or Markdown outside the code block. "
+                "Return ONLY the TypeScript code.\n"
+            )
+        else:
+            fence = "python"
+            requirements = (
+                "Important requirements:\n"
+                "- The result MUST be a single, runnable Python web application file.\n"
+                "- Do not include any explanations, comments outside the code, or Markdown. "
+                "Return ONLY the Python code.\n"
+            )
+
         user_content = (
             f"{agent_instruction}\n\n"
-            "Important requirements:\n"
-            "- The result MUST be a single, runnable Python web application file.\n"
-            "- Do not include any explanations, comments outside the code, or Markdown. "
-            "Return ONLY the Python code.\n\n"
-            "Here is the current code snippet:\n"
-            "```python\n"
+            f"{requirements}\n"
+            f"Here is the current code snippet:\n"
+            f"```{fence}\n"
             f"{snippet}\n"
-            "```"
+            f"```"
         )
         return [
             {"role": "system", "content": "You are a helpful coding assistant."},
             {"role": "user", "content": user_content},
         ]
 
-    def generate_from_snippet(self, snippet: str, agent_instruction: str) -> str:
-        messages = self._build_messages(snippet, agent_instruction)
+    def generate_from_snippet(self, snippet: str, agent_instruction: str, language: str = "python") -> str:
+        messages = self._build_messages(snippet, agent_instruction, language=language)
         kwargs: Dict[str, Any] = {
             "model": self._config.model,
             "messages": messages,
@@ -125,9 +155,10 @@ class LiteLLMClientImpl:
         return content
 
 
-def get_llm_client(config_path: str = "config/config.yaml") -> LLMClient:
+def get_llm_client(config_path: str = "config/config.yaml", model_override: Optional[str] = None) -> LLMClient:
     """
     Factory function — returns a LiteLLM-backed client for any supported provider.
     The provider is inferred automatically from the model name in config.yaml.
+    Pass model_override to use a specific model regardless of config.
     """
-    return LiteLLMClientImpl(config_path=config_path)
+    return LiteLLMClientImpl(config_path=config_path, model_override=model_override)

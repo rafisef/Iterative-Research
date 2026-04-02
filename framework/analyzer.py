@@ -1,29 +1,36 @@
-#!/usr/bin/env python3
 """
-analyze.py — Vulnerability trend analyzer for iterative LLM research results.
+framework/analyzer.py
+----------------------
+Analysis component of the three-component pipeline.
 
-Reads results.jsonl from a timestamped run directory and prints:
-  1. A summary header (record counts, agents, models, iteration range)
-  2. Per-agent trend tables (Bandit HIGH/MED, Semgrep findings with bar charts)
-  3. Per-agent finding-type detail (specific test IDs, rule IDs, CWEs, messages)
-  4. A delta summary (first → last iteration change per agent)
+Responsibilities
+----------------
+- Read all ResultRecord entries from results.jsonl
+- Print a human-readable summary:
+    * Header: record counts, agents, models, vulnerabilities, iteration range
+    * Per-vulnerability / per-agent trend table with bar charts
+    * Per-finding detail (Bandit test IDs, Semgrep rule IDs, line numbers, code)
+    * First → last iteration delta per agent
+- Optional CSV export (one row per individual finding)
 
-Run discovery (in order of precedence):
-  --results path/to/results.jsonl  → load that file directly
-  --run 2026-03-18_14-30-00        → load runs/<run-id>/results.jsonl
-  --run runs/2026-03-18_14-30-00   → load from an explicit path
-  (none)                           → auto-detect the most recent run in runs/
+Public API
+----------
+    analyze_run(run_dir, *, vuln_filter, agent_filter, include_findings, csv_path) -> None
 
-Usage:
-  python analyze.py                              # latest run
-  python analyze.py --run 2026-03-18_14-30-00   # specific run by ID
-  python analyze.py --list-runs                  # enumerate all runs
-  python analyze.py --results results.jsonl      # explicit file (legacy)
-  python analyze.py --csv out.csv --no-findings  # CSV export, no detail
+Helper utilities also used by utils/analyze.py CLI wrapper
+----------------------------------------------------------
+    load_results(results_path) -> List[Dict]
+    group_records(records, filter_agent, filter_vuln) -> grouped dict
+    print_summary(records, results_path) -> None
+    print_trend_table(grouped, metric_keys) -> None
+    print_finding_types(grouped) -> None
+    write_csv(grouped, output_path) -> None
+    list_runs(runs_dir) -> None
+    find_latest_results(runs_dir) -> str | None
+    resolve_run_path(run_arg, runs_dir) -> str | None
 """
 from __future__ import annotations
 
-import argparse
 import csv
 import json
 import sys
@@ -31,12 +38,91 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from .io_utils import logger
+
 
 RUNS_DIR = "runs"
 
 
 # ---------------------------------------------------------------------------
-# Run discovery
+# Public pipeline entry point
+# ---------------------------------------------------------------------------
+
+def analyze_run(
+    run_dir: Path,
+    *,
+    vuln_filter: str | None = None,
+    agent_filter: str | None = None,
+    include_findings: bool = True,
+    csv_path: str | None = None,
+) -> None:
+    """
+    Read results.jsonl from a run directory and print a human-readable summary.
+
+    Parameters
+    ----------
+    run_dir:
+        Path to the run directory (e.g. runs/2026-04-01_11-34-04).
+    vuln_filter:
+        When set, only show results for this vulnerability ID.
+    agent_filter:
+        When set, only show results for this agent ID.
+    include_findings:
+        When True (default), print per-iteration finding detail.
+    csv_path:
+        When set, also export results to a CSV file at this path.
+    """
+    results_path = str(run_dir / "results.jsonl")
+    if not Path(results_path).exists():
+        print(f"[info] No results.jsonl found in {run_dir}.")
+        print("[info] Run 'python main.py' to create the first run.")
+        return
+
+    records = load_results(results_path)
+    if not records:
+        print(f"[info] results.jsonl exists but contains no records: {results_path}")
+        return
+
+    print_summary(records, results_path)
+
+    grouped = group_records(
+        records,
+        filter_agent=agent_filter,
+        filter_vuln=vuln_filter,
+    )
+
+    if not any(grouped.values()):
+        print("[info] No matching records to display.")
+        return
+
+    has_static = any(
+        r.get("bandit_high") is not None
+        for agent_data in grouped.values()
+        for iter_data in agent_data.values()
+        for r in iter_data.values()
+    )
+
+    if has_static:
+        metric_keys: List[Tuple[str, str]] = [
+            ("bandit_high", "Bandit HIGH"),
+            ("bandit_medium", "Bandit MED"),
+            ("bandit_low", "Bandit LOW"),
+            ("semgrep_findings", "Semgrep"),
+        ]
+    else:
+        metric_keys = [("nuclei_exit_code", "Nuclei exit")]
+
+    print_trend_table(grouped, metric_keys)
+
+    if include_findings:
+        print_finding_types(grouped)
+
+    if csv_path:
+        write_csv(grouped, csv_path)
+
+
+# ---------------------------------------------------------------------------
+# Run discovery helpers (also used by the utils/analyze.py CLI wrapper)
 # ---------------------------------------------------------------------------
 
 def _all_run_dirs(runs_dir: str = RUNS_DIR) -> List[Path]:
@@ -60,13 +146,11 @@ def resolve_run_path(run_arg: str, runs_dir: str = RUNS_DIR) -> Optional[str]:
     Accept either a bare run ID (timestamp), a relative path, or absolute path
     and return the resolved results.jsonl path.
     """
-    # Direct path given
     p = Path(run_arg)
     if p.is_file():
         return str(p)
     if p.is_dir() and (p / "results.jsonl").exists():
         return str(p / "results.jsonl")
-    # Treat as run ID under runs_dir
     candidate = Path(runs_dir) / run_arg / "results.jsonl"
     if candidate.exists():
         return str(candidate)
@@ -78,7 +162,7 @@ def list_runs(runs_dir: str = RUNS_DIR) -> None:
     dirs = _all_run_dirs(runs_dir)
     if not dirs:
         print(f"[info] No runs found in '{runs_dir}/'.")
-        print("[info] Run 'python -m framework.runner' to create the first run.")
+        print("[info] Run 'python main.py' to create the first run.")
         return
 
     print(f"\n{'=' * 70}")
@@ -88,11 +172,10 @@ def list_runs(runs_dir: str = RUNS_DIR) -> None:
     print(f"  {'-' * 26}  {'-' * 7}  {'-' * 20}  {'-' * 10}")
 
     latest_id = dirs[-1].name if dirs else ""
-    for d in reversed(dirs):  # newest first
+    for d in reversed(dirs):
         results_file = d / "results.jsonl"
         records = _count_lines(results_file)
 
-        # Try to read metadata for model/iterations summary.
         meta = _load_metadata(d)
         model = meta.get("model", "?") if meta else "?"
         iters = meta.get("iterations", "?") if meta else "?"
@@ -126,6 +209,7 @@ def _load_metadata(run_dir: Path) -> Optional[Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 def load_results(results_path: str) -> List[Dict[str, Any]]:
+    """Load all records from a results.jsonl file."""
     records = []
     p = Path(results_path)
     if not p.exists():
@@ -217,7 +301,6 @@ def print_summary(records: List[Dict[str, Any]], results_path: str) -> None:
     iters = sorted({r.get("iteration", -1) for r in records})
     run_ids = sorted({r.get("run_id", "") for r in records if r.get("run_id")})
 
-    # Try to load run_metadata.json from the same directory as results.jsonl.
     run_dir = Path(results_path).parent
     meta = _load_metadata(run_dir)
 
@@ -231,7 +314,7 @@ def print_summary(records: List[Dict[str, Any]], results_path: str) -> None:
     print(f"  Agents          : {', '.join(agents)}")
     print(f"  Vulnerabilities : {', '.join(vulns)}")
     print(f"  Models          : {', '.join(models)}")
-    print(f"  Iterations      : {min(iters)} – {max(iters)}  ({len(iters)} distinct values)")
+    print(f"  Iterations      : {min(iters)} \u2013 {max(iters)}  ({len(iters)} distinct values)")
 
     has_static = any(r.get("bandit_high") is not None for r in records)
     has_nuclei = any(r.get("nuclei_exit_code") is not None for r in records)
@@ -255,14 +338,14 @@ def _bar(value: int, max_value: int, width: int = 12) -> str:
     if max_value == 0:
         return " " * width
     filled = round((value / max_value) * width)
-    return "█" * filled + "░" * (width - filled)
+    return "\u2588" * filled + "\u2591" * (width - filled)
 
 
 def print_trend_table(
     grouped: Dict[str, Dict[str, Dict[int, Dict[str, Any]]]],
     metric_keys: List[Tuple[str, str]],
 ) -> None:
-    """Prints an ASCII trend table for each vulnerability → agent combination."""
+    """Print an ASCII trend table for each vulnerability → agent combination."""
     for vuln_id, agents in sorted(grouped.items()):
         print(f"\n{'=' * 70}")
         print(f"  Vulnerability: {vuln_id}")
@@ -299,7 +382,7 @@ def print_trend_table(
                     print(f"  {val:<3} {bar} ", end="")
                 print(f"  {prompt_short}")
 
-        print(f"\n  {'--- Delta summary (first → last iteration) ---'}")
+        print(f"\n  {'--- Delta summary (first \u2192 last iteration) ---'}")
         for agent_id, iterations in sorted(agents.items()):
             if len(iterations) < 2:
                 continue
@@ -336,7 +419,7 @@ def _format_semgrep_issue(issue: Dict[str, Any]) -> str:
     line = issue.get("line_number", "?")
     message = (issue.get("message") or "").strip()
     matched = (issue.get("matched_lines") or "").strip().replace("\n", " ")
-    matched_str = f'  → "{matched[:60]}"' if matched else ""
+    matched_str = f'  \u2192 "{matched[:60]}"' if matched else ""
     return f"    [SEMGREP] {rule_id} ({severity})  line {line}  {message}{matched_str}"
 
 
@@ -344,12 +427,12 @@ def print_finding_types(
     grouped: Dict[str, Dict[str, Dict[int, Dict[str, Any]]]],
 ) -> None:
     """
-    Prints per-iteration finding detail and a deduplicated unique-type summary
+    Print per-iteration finding detail and a deduplicated unique-type summary
     per agent per vulnerability.
     """
     for vuln_id, agents in sorted(grouped.items()):
         print(f"\n{'=' * 70}")
-        print(f"  Finding Types — Vulnerability: {vuln_id}")
+        print(f"  Finding Types \u2014 Vulnerability: {vuln_id}")
         print(f"{'=' * 70}")
 
         for agent_id, iterations in sorted(agents.items()):
@@ -499,137 +582,4 @@ def write_csv(
 
     print(f"\n[info] CSV written to: {output_path}")
     print(f"[info] Format: one row per finding (empty finding columns = no findings that iteration)")
-
-
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
-
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Analyze iterative LLM research results and print vulnerability trends."
-    )
-
-    source_group = parser.add_mutually_exclusive_group()
-    source_group.add_argument(
-        "--results",
-        type=str,
-        default="",
-        help="Direct path to a results.jsonl file.",
-    )
-    source_group.add_argument(
-        "--run",
-        type=str,
-        default="",
-        metavar="RUN_ID_OR_PATH",
-        help=(
-            "Run ID (e.g. 2026-03-18_14-30-00) or path to a run directory. "
-            "Defaults to the most recent run in runs/."
-        ),
-    )
-    source_group.add_argument(
-        "--list-runs",
-        action="store_true",
-        help="List all available runs and exit.",
-    )
-
-    parser.add_argument(
-        "--runs-dir",
-        type=str,
-        default=RUNS_DIR,
-        help=f"Root directory containing all run folders (default: {RUNS_DIR}).",
-    )
-    parser.add_argument(
-        "--csv",
-        type=str,
-        default="",
-        help="If provided, also write results to this CSV file path.",
-    )
-    parser.add_argument(
-        "--agent",
-        type=str,
-        default="",
-        help="Filter output to a single agent ID.",
-    )
-    parser.add_argument(
-        "--vuln",
-        type=str,
-        default="",
-        help="Filter output to a single vulnerability ID.",
-    )
-    parser.add_argument(
-        "--no-findings",
-        action="store_true",
-        help="Skip the per-finding detail section; show only trend tables.",
-    )
-    args = parser.parse_args()
-
-    # --- Resolve which results.jsonl to load ----------------------------------
-    if args.list_runs:
-        list_runs(args.runs_dir)
-        return
-
-    if args.results:
-        results_path = args.results
-    elif args.run:
-        results_path = resolve_run_path(args.run, args.runs_dir)
-        if results_path is None:
-            print(
-                f"[error] Could not resolve run '{args.run}'. "
-                f"Use --list-runs to see available runs.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-    else:
-        results_path = find_latest_results(args.runs_dir)
-        if results_path is None:
-            print(
-                f"[error] No runs found in '{args.runs_dir}/'. "
-                "Run the experiment first: python -m framework.runner",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        print(f"[info] Auto-selected most recent run: {Path(results_path).parent.name}")
-
-    # --- Load and analyze -----------------------------------------------------
-    records = load_results(results_path)
-    print_summary(records, results_path)
-
-    grouped = group_records(
-        records,
-        filter_agent=args.agent or None,
-        filter_vuln=args.vuln or None,
-    )
-
-    if not any(grouped.values()):
-        print("[info] No matching records to display.")
-        return
-
-    has_static = any(
-        r.get("bandit_high") is not None
-        for agent_data in grouped.values()
-        for iter_data in agent_data.values()
-        for r in iter_data.values()
-    )
-
-    if has_static:
-        metric_keys: List[Tuple[str, str]] = [
-            ("bandit_high", "Bandit HIGH"),
-            ("bandit_medium", "Bandit MED"),
-            ("bandit_low", "Bandit LOW"),
-            ("semgrep_findings", "Semgrep"),
-        ]
-    else:
-        metric_keys = [("nuclei_exit_code", "Nuclei exit")]
-
-    print_trend_table(grouped, metric_keys)
-
-    if not args.no_findings:
-        print_finding_types(grouped)
-
-    if args.csv:
-        write_csv(grouped, args.csv)
-
-
-if __name__ == "__main__":
-    main()
+    logger.info("CSV written to %s", output_path)

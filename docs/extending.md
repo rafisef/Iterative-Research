@@ -8,8 +8,8 @@ This page describes all the extension points in the framework. The codebase is d
 
 See the dedicated [Agents](./agents.md#adding-a-new-agent) page for full instructions. In summary:
 
-1. Add a new `Agent` entry to `get_all_agents()` in `framework/agents.py`.
-2. Add its ID to the `agents` list in `config/config.yaml`.
+1. Add a new entry to the `agents:` block in `config/config.yaml` (with `description` and `instructions`).
+2. Add its ID to `experiment.agents` in `config/config.yaml`.
 
 ---
 
@@ -257,7 +257,7 @@ logger.addHandler(handler)
 
 run_experiment(
     config_path="config/config.yaml",
-    cli_args={"dry_run": False, "skip_nuclei": False},
+    cli_args={},
 )
 ```
 
@@ -273,8 +273,6 @@ from framework.runner import run_experiment
 run_experiment(
     config_path="config/config.yaml",
     cli_args={
-        "dry_run": False,
-        "skip_nuclei": False,
         "log": "my-run",
     },
 )
@@ -286,6 +284,9 @@ When both `config_path` and `cli_args` are provided, `_parse_args()` is skipped 
 
 | Key | Type | Description |
 |---|---|---|
-| `dry_run` | `bool` | Equivalent to `--dry-run` flag |
-| `skip_nuclei` | `bool` | Equivalent to `--skip-nuclei` flag |
+| `test_run` | `str \| None` | Path to a snippet for a test-run scan; `None` disables test-run mode |
+| `snippet` | `str \| None` | Path to an ad-hoc snippet to run the full experiment against |
+| `iterations` | `int \| None` | Override iteration count; `None` uses config value |
+| `model` | `str \| None` | Override LLM model; `None` uses config value |
+| `run_id` | `str` | Override run ID; empty string auto-generates a timestamp |
 | `log` | `str \| None` | Log file base name; `None` disables file logging |

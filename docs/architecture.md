@@ -42,7 +42,7 @@ runner.py
 
 The top-level orchestrator. Responsibilities:
 
-- Parse CLI arguments (`--config`, `--dry-run`, `--skip-nuclei`, `--log`).
+- Parse CLI arguments (`--config`, `--test-run`, `--snippet`, `--iterations`, `--model`, `--run-id`, `--log`).
 - Load and validate `config/config.yaml`.
 - Resolve agents and vulnerabilities from config IDs.
 - Instantiate the LLM client.
@@ -196,7 +196,7 @@ run_experiment()
             ├── 3. SAVE
             │       write outputs/<agent>/<vuln>/iteration_<N>.py
             │
-            ├── [if dry_run → write ResultRecord{success=False} and continue]
+            ├── [if test_run_flag → log result, skip file writes, return]
             │
             ├── 4. SERVE
             │       port = base_port + agent_idx*100 + iteration

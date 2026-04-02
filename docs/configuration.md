@@ -25,7 +25,6 @@ experiment:
     - feature
     - security
     - ambiguous
-  dry_run: false
   run_nuclei: true
   max_workers: 4
 
@@ -77,17 +76,10 @@ Controls the high-level experiment parameters.
 | `iterations` | `int` | `10` | Number of iterative improvement rounds per agent per vulnerability. The paper used `10`. Each iteration feeds the previous iteration's output back as input. |
 | `vulnerabilities` | `list[string]` | `[]` | List of vulnerability IDs to test. Each ID must exist in the vulnerability registry (`framework/vulnerabilities.py`). |
 | `agents` | `list[string]` | `[]` | List of agent IDs to use. Each ID must exist in the agent registry (`framework/agents.py`). |
-| `dry_run` | `bool` | `false` | When `true`, generated code is saved to disk but no Flask servers are started and no Nuclei scans are run. Useful for testing LLM connectivity and output quality cheaply. Can also be set via `--dry-run` CLI flag. |
 | `run_nuclei` | `bool` | `true` | When `false`, Flask servers are still started and health-checked, but Nuclei scans are skipped. Useful for verifying that generated snippets are runnable without requiring a Nuclei installation. Can be overridden with `--skip-nuclei`. |
 | `max_workers` | `int` | `1` | Number of agent threads per iteration. When `> 1`, agents within the same iteration run concurrently using `ThreadPoolExecutor`. Iterations themselves always run sequentially. Set to `1` for fully sequential, easier-to-debug execution. |
 
-**Interaction between `dry_run` and `run_nuclei`:**
-
-| `dry_run` | `run_nuclei` | Behaviour |
-|---|---|---|
-| `true` | (any) | Generate + save code only. No servers, no scans. |
-| `false` | `true` | Full pipeline: generate → serve → scan. |
-| `false` | `false` | Generate + serve + health-check, but skip scan. |
+To verify LLM connectivity without running a full experiment, use `python utils/test_llm_connectivity.py`.
 
 ---
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-nuclei_rescan.py — Re-run Nuclei dynamic scanning against snippets from a completed run.
+nuclei_rescan.py — Run Nuclei dynamic scanning against snippets from a completed run.
 
 Reads results.jsonl from a timestamped run directory, filters to iterations where
 Bandit/Semgrep found something (or all of them with --all), then for each matched

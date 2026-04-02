@@ -39,11 +39,11 @@ export OPENAI_API_KEY="sk-..."
 # 3. Update the nuclei binary path in config/config.yaml
 #    nuclei.binary_path: /path/to/nuclei
 
-# 4. Run a dry-run first to verify LLM connectivity
-python -m framework.runner --dry-run
+# 4. Verify LLM connectivity (no files written)
+python utils/test_llm_connectivity.py
 
 # 5. Run the full experiment
-python -m framework.runner
+python main.py
 ```
 
 ---
