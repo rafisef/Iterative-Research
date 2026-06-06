@@ -32,9 +32,12 @@ export interface ResultRecord {
   bandit_medium?: number;
   bandit_low?: number;
   semgrep_findings: number;
-  semgrep_error: number;
-  semgrep_warning: number;
-  semgrep_info: number;
+  semgrep_high?: number;
+  semgrep_medium?: number;
+  semgrep_low?: number;
+  semgrep_error?: number;
+  semgrep_warning?: number;
+  semgrep_info?: number;
   static_log_path: string;
   bandit_issues?: BanditIssue[];
   semgrep_issues?: SemgrepIssue[];
@@ -53,6 +56,10 @@ export interface BanditIssue {
 export interface SemgrepIssue {
   rule_id: string;
   severity: string;
+  severity_normalized?: string;
+  confidence?: string;
+  cwe?: string[];
+  owasp?: string[];
   message: string;
   line_number: number;
   matched_lines: string;
@@ -122,9 +129,9 @@ export interface TrendRow {
   bandit_medium?: number;
   bandit_low?: number;
   semgrep_findings: number;
-  semgrep_error: number;
-  semgrep_warning: number;
-  semgrep_info: number;
+  semgrep_high?: number;
+  semgrep_medium?: number;
+  semgrep_low?: number;
   prompt: string;
   model: string;
 }
@@ -135,9 +142,9 @@ export interface DeltaEntry {
   bandit_high_delta?: number;
   bandit_medium_delta?: number;
   bandit_low_delta?: number;
-  semgrep_error_delta: number;
-  semgrep_warning_delta: number;
-  semgrep_info_delta: number;
+  semgrep_high_delta: number;
+  semgrep_medium_delta: number;
+  semgrep_low_delta: number;
 }
 
 export interface FindingGroup {

@@ -1,24 +1,16 @@
 """
 utils/scan.py
 --------------
-Standalone CLI wrapper for the static-scanning component.
+Standalone CLI wrapper for static Semgrep (+ Bandit for Python) scanning.
 
-Modes
------
-1) Run-directory mode (default):
-    python utils/scan.py --run 2026-04-01_11-34-04
+Scans either a single file or a directory (recursively) and writes a
+results.jsonl file that can be analyzed with utils/analyze.py.
 
-2) Baseline scan mode:
-    python utils/scan.py --baseline-scan --snippet path/to/file.ts
-    python utils/scan.py --baseline-scan --base-code-dir snippets/
-
-3) Ad-hoc scan mode (re-scan any files without baseline tagging):
-    python utils/scan.py --adhoc-scan --snippet path/to/file.ts
-    python utils/scan.py --adhoc-scan --base-code-dir runs/my-run/ai-generated-code-snippets/
-
-Options
--------
-    --semgrep-config "p/xss p/owasp-top-ten"   Override Semgrep rulesets
+Usage:
+  python utils/scan.py --code-snippet-individual path/to/file.ts -o out/results.jsonl
+  python utils/scan.py --code-snippet-dir snippets/ -o out/results.jsonl
+  python utils/scan.py --code-snippet-dir runs/my-run/ai-generated-code-snippets/ \\
+      -o runs/my-run/results.jsonl --semgrep-config "p/xss p/owasp-top-ten"
 """
 from __future__ import annotations
 
@@ -30,102 +22,58 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from framework.io_utils import load_yaml_config, logger
-from framework.scan_runner import run_scans, scan_baseline
+from framework.io_utils import logger
+from framework.scan_runner import scan_files
 
-
-RUNS_DIR = "runs"
-
-
-def _find_latest_run(runs_dir: str = RUNS_DIR) -> Path | None:
-    """Return the most recently created run directory, or None if none exist."""
-    runs_path = Path(runs_dir)
-    if not runs_path.exists():
-        return None
-    subdirs = sorted(
-        (p for p in runs_path.iterdir() if p.is_dir()),
-        key=lambda p: p.name,
-    )
-    return subdirs[-1] if subdirs else None
-
-
-def _resolve_run_dir(run_arg: str, runs_dir: str = RUNS_DIR) -> Path | None:
-    """Accept a run ID or path and return the resolved run directory Path."""
-    p = Path(run_arg)
-    if p.is_dir():
-        return p
-    candidate = Path(runs_dir) / run_arg
-    if candidate.is_dir():
-        return candidate
-    return None
+_DEFAULT_SEMGREP_CONFIG = "auto"
 
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description=(
-            "Run static analysis (Bandit / Semgrep) on generated output files "
-            "in an existing run directory, or perform a baseline scan on "
-            "arbitrary source files."
-        )
+        description="Scan a file or directory with Semgrep (and Bandit for Python) "
+                    "and write a results.jsonl.",
     )
 
-    mode = parser.add_mutually_exclusive_group()
-    mode.add_argument(
-        "--run",
-        type=str,
-        default="",
-        metavar="RUN_ID_OR_PATH",
-        help=(
-            "Run ID (e.g. 2026-04-01_11-34-04) or path to a run directory. "
-            "Defaults to the most recent run in runs/."
-        ),
-    )
-    mode.add_argument(
-        "--baseline-scan",
-        action="store_true",
-        help="Scan arbitrary files/directories to create a baseline of findings.",
-    )
-    mode.add_argument(
-        "--adhoc-scan",
-        action="store_true",
-        help="Scan arbitrary files/directories (ad-hoc). Like baseline but tagged agent='scan'.",
-    )
-
-    parser.add_argument(
-        "--snippet",
-        type=str,
-        default="",
-        metavar="FILE",
-        help="Single source file to scan (used with --baseline-scan or --adhoc-scan).",
-    )
-    parser.add_argument(
-        "--base-code-dir",
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument(
+        "--code-snippet-dir",
         type=str,
         default="",
         metavar="DIR",
-        help="Directory of source files to scan (used with --baseline-scan or --adhoc-scan).",
+        help="Directory of code snippets to scan recursively.",
     )
-    parser.add_argument(
-        "--runs-dir",
+    source.add_argument(
+        "--code-snippet-individual",
         type=str,
-        default=RUNS_DIR,
-        help=f"Root directory containing all run folders. Default: {RUNS_DIR}.",
+        default="",
+        metavar="FILE",
+        help="Path to an individual file to scan.",
     )
+
     parser.add_argument(
-        "--config",
+        "-o", "--output",
         type=str,
-        default="config/config.yaml",
-        help="Path to YAML configuration file. Default: config/config.yaml.",
+        required=True,
+        metavar="PATH",
+        help="Output path for the results.jsonl scan file.",
     )
     parser.add_argument(
         "--semgrep-config",
         type=str,
-        default="",
+        default=_DEFAULT_SEMGREP_CONFIG,
         metavar="RULESETS",
         help=(
             'Space-separated Semgrep rule packs to use instead of defaults. '
-            'Example: "p/xss p/owasp-top-ten"'
+            'Example: "p/xss p/owasp-top-ten". '
+            f'(default: {_DEFAULT_SEMGREP_CONFIG})'
         ),
+    )
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Number of parallel worker threads to use for scanning (default: 1).",
     )
     return parser.parse_args()
 
@@ -133,84 +81,23 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
 
-    if args.baseline_scan:
-        target = args.snippet or args.base_code_dir
-        if not target:
-            logger.error(
-                "--baseline-scan requires --snippet <FILE> or --base-code-dir <DIR>"
-            )
-            sys.exit(1)
+    target = args.code_snippet_dir or args.code_snippet_individual
 
-        run_dir = scan_baseline(
+    try:
+        output_path = scan_files(
             target=target,
-            runs_dir=args.runs_dir,
+            output_path=args.output,
             semgrep_config=args.semgrep_config,
+            max_workers=args.max_workers,
         )
-        logger.info(
-            "Baseline scan complete. Analyze results:\n"
-            "    python utils/analyze.py --run %s",
-            run_dir.name,
-        )
-        return
-
-    if args.adhoc_scan:
-        target = args.snippet or args.base_code_dir
-        if not target:
-            logger.error(
-                "--adhoc-scan requires --snippet <FILE> or --base-code-dir <DIR>"
-            )
-            sys.exit(1)
-
-        from framework.scan_runner import scan_adhoc
-        run_dir = scan_adhoc(
-            target=target,
-            runs_dir=args.runs_dir,
-            semgrep_config=args.semgrep_config,
-        )
-        logger.info(
-            "Adhoc scan complete. Analyze results:\n"
-            "    python utils/analyze.py --run %s",
-            run_dir.name,
-        )
-        return
-
-    if args.run:
-        run_dir = _resolve_run_dir(args.run, args.runs_dir)
-        if run_dir is None:
-            logger.error(
-                "Could not find run directory for '%s'. "
-                "Use a valid run ID under %s/ or an explicit path.",
-                args.run, args.runs_dir,
-            )
-            sys.exit(1)
-    else:
-        run_dir = _find_latest_run(args.runs_dir)
-        if run_dir is None:
-            logger.error(
-                "No run directories found in '%s/'. "
-                "Run code generation first:\n    python utils/generate.py",
-                args.runs_dir,
-            )
-            sys.exit(1)
-        logger.info("Auto-selected most recent run: %s", run_dir.name)
-
-    config = load_yaml_config(args.config)
-    experiment_cfg = config.get("experiment", {})
-    max_workers = max(1, int(experiment_cfg.get("max_workers", 1)))
-
-    logger.info("Scanning run directory: %s", run_dir.resolve())
-
-    run_scans(
-        run_dir=run_dir,
-        config=config,
-        max_workers=max_workers,
-        semgrep_config_override=args.semgrep_config,
-    )
+    except (FileNotFoundError, ValueError) as exc:
+        logger.error("%s", exc)
+        sys.exit(1)
 
     logger.info(
-        "Scan complete. Analyze results next:\n"
-        "    python utils/analyze.py --run %s",
-        run_dir.name,
+        "Scan complete. Analyze results:\n"
+        "    python utils/analyze.py -f %s",
+        output_path,
     )
 
 

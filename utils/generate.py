@@ -35,10 +35,10 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from framework.agents import resolve_agents_from_config
-from framework.generator import discover_snippets_from_dir, generate_code
+from framework.generator import discover_snippets_from_dir, generate_code, Vulnerability
 from framework.io_utils import ensure_dir, load_yaml_config, logger
 from framework.static_scanner import detect_language
-from framework.vulnerabilities import Vulnerability, resolve_vulnerabilities_from_config
+# vulnerability registry removed — resolve via snippets directory when needed
 
 
 def _make_run_id() -> str:
@@ -191,7 +191,20 @@ def main() -> None:
         )
         base_code_dir_arg = args.base_code_dir
     else:
-        vulns = resolve_vulnerabilities_from_config(vuln_ids)
+        snippets_dir = Path(paths_cfg.get("snippets_dir", "snippets"))
+        try:
+            discovered = {v.id: v for v in discover_snippets_from_dir(snippets_dir)}
+        except (FileNotFoundError, NotADirectoryError) as exc:
+            logger.error("%s", exc)
+            sys.exit(1)
+        if vuln_ids:
+            try:
+                vulns = [discovered[vid] for vid in vuln_ids]
+            except KeyError as e:
+                logger.error("Unknown vulnerability id in config: %s", e)
+                sys.exit(1)
+        else:
+            vulns = list(discovered.values())
 
     logger.info(
         "Starting code generation — run_id=%s  model=%s  iterations=%d  "
@@ -217,8 +230,9 @@ def main() -> None:
 
     logger.info(
         "Generation complete. Run static scans next:\n"
-        "    python utils/scan.py --run %s",
-        run_id,
+        "    python utils/scan.py --code-snippet-dir %s/%s/ai-generated-code-snippets "
+        "-o %s/%s/results.jsonl",
+        runs_dir, run_id, runs_dir, run_id,
     )
 
 

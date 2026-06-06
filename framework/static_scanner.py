@@ -16,6 +16,15 @@ from .io_utils import ensure_dir, logger
 
 _PYTHON_EXTS: frozenset[str] = frozenset({".py"})
 _JS_TS_EXTS: frozenset[str] = frozenset({".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"})
+_C_EXTS: frozenset[str] = frozenset({".c", ".h", ".cpp", ".cc", ".cxx", ".hpp"})
+_JAVA_EXTS: frozenset[str] = frozenset({".java"})
+_RUBY_EXTS: frozenset[str] = frozenset({".rb"})
+_PHP_EXTS: frozenset[str] = frozenset({".php"})
+_SWIFT_EXTS: frozenset[str] = frozenset({".swift"})
+_KOTLIN_EXTS: frozenset[str] = frozenset({".kt"})
+
+
+_ALL_EXTS: frozenset[str] = _PYTHON_EXTS | _JS_TS_EXTS | _C_EXTS | _JAVA_EXTS | _RUBY_EXTS | _PHP_EXTS | _SWIFT_EXTS | _KOTLIN_EXTS
 
 # Default Semgrep config when no override or per-language packs are selected.
 # "auto" enables Semgrep's built-in auto-detection of relevant rules.
@@ -26,13 +35,26 @@ _DEFAULT_SEMGREP_CONFIG = "auto"
 _LANGUAGE_SEMGREP_PACKS: Dict[str, str] = {
     "python":     "p/python p/bandit p/owasp-top-ten",
     "typescript": "p/typescript p/javascript p/owasp-top-ten",
+    "c":          "p/c p/owasp-top-ten",
+    "java":       "p/java p/owasp-top-ten",
+    "ruby":       "p/ruby p/owasp-top-ten",
+    "php":        "p/php p/owasp-top-ten",
+    "swift":      "p/swift p/owasp-top-ten",
+    "kotlin":     "p/kotlin p/owasp-top-ten"
 }
 
 # Ordered list of scanner backends to invoke per language.
 # To add a new scanner: implement run_<tool>(), add its name here.
 _ENABLED_SCANNERS: Dict[str, List[str]] = {
-    "python":     ["bandit", "semgrep"],
+    # "python":     ["bandit", "semgrep"],
+    "python":     ["semgrep"],
     "typescript": ["semgrep"],
+    "c":          ["semgrep"],
+    "java":       ["semgrep"],
+    "ruby":       ["semgrep"],
+    "php":        ["semgrep"],
+    "swift":      ["semgrep"],
+    "kotlin":     ["semgrep"]
 }
 
 
@@ -43,6 +65,18 @@ def detect_language(path: str) -> str:
         return "python"
     if ext in _JS_TS_EXTS:
         return "typescript"
+    if ext in _C_EXTS:
+        return "c"
+    if ext in _JAVA_EXTS:
+        return "java"
+    if ext in _RUBY_EXTS:
+        return "ruby"
+    if ext in _PHP_EXTS:
+        return "php"
+    if ext in _SWIFT_EXTS:
+        return "swift"
+    if ext in _KOTLIN_EXTS:
+        return "kotlin"
     return "unknown"
 
 
@@ -62,9 +96,16 @@ class BanditResult:
 @dataclass
 class SemgrepResult:
     findings: int = 0
-    error: int = 0      # ERROR severity — likely vulnerabilities (HIGH)
-    warning: int = 0    # WARNING severity — potential issues (MEDIUM)
-    info: int = 0       # INFO severity — informational (LOW)
+    # Canonical severity buckets — derived from each finding's true security
+    # severity (extra.metadata.severity / impact) when available, otherwise
+    # mapped from the rule level. high + medium + low == findings.
+    high: int = 0       # HIGH severity — likely vulnerabilities
+    medium: int = 0     # MEDIUM severity — potential issues
+    low: int = 0        # LOW severity — informational
+    # Legacy rule-level buckets, retained for backward compatibility.
+    error: int = 0      # ERROR rule level
+    warning: int = 0    # WARNING rule level
+    info: int = 0       # INFO rule level
     rules_matched: List[str] = field(default_factory=list)
     issues: List[Dict[str, Any]] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
@@ -131,6 +172,41 @@ def run_bandit(snippet_path: str) -> BanditResult:
 
 _SEMGREP_VENV = Path.home() / ".venvs" / "semgrep-env"
 
+# Maps any severity token Semgrep may emit (rule level or metadata severity)
+# onto the canonical HIGH / MEDIUM / LOW buckets used across the framework.
+_SEV_LEVELS: Dict[str, str] = {
+    "CRITICAL": "HIGH", "HIGH": "HIGH",
+    "MEDIUM": "MEDIUM", "MODERATE": "MEDIUM", "WARNING": "MEDIUM",
+    "LOW": "LOW", "INFO": "LOW",
+    "ERROR": "HIGH",   # rule-level fallback (ERROR rules are likely vulns)
+}
+
+
+def _normalize_semgrep_severity(extra: Dict[str, Any]) -> str:
+    """
+    Derive a canonical HIGH/MEDIUM/LOW severity for a single Semgrep result.
+
+    Prefers the finding's true security severity from ``extra.metadata``
+    (``severity`` then ``impact``) which security rule packs populate, and
+    falls back to the rule level (``extra.severity`` = ERROR/WARNING/INFO).
+    Defaults to INFORMATIONAL when nothing is recognised.
+    """
+    meta = extra.get("metadata") or {}
+    for key in ("severity", "impact"):
+        val = meta.get(key)
+        if isinstance(val, str) and val.upper() in _SEV_LEVELS:
+            return _SEV_LEVELS[val.upper()]
+    return _SEV_LEVELS.get((extra.get("severity") or "").upper(), "INFORMATIONAL")
+
+
+def _as_str_list(val: Any) -> List[str]:
+    """Normalise a Semgrep metadata field (str | list | None) to a list[str]."""
+    if val is None:
+        return []
+    if isinstance(val, list):
+        return [str(v) for v in val]
+    return [str(val)]
+
 
 def _semgrep_binary() -> Optional[str]:
     """
@@ -176,6 +252,7 @@ def run_semgrep(snippet_path: str, semgrep_config: str = "auto") -> SemgrepResul
     logger.debug("Running semgrep: %s", " ".join(cmd))
 
     try:
+        print("|SEMGREP CMD|: ", " ".join(cmd))
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         raw = proc.stdout or ""
         if not raw.strip():
@@ -193,16 +270,26 @@ def run_semgrep(snippet_path: str, semgrep_config: str = "auto") -> SemgrepResul
         rules_matched = list({r.get("check_id", "unknown") for r in results})
         errors_list = [e.get("message", "") for e in data.get("errors", [])]
 
-        sev_counts = {"ERROR": 0, "WARNING": 0, "INFO": 0}
+        level_counts = {"ERROR": 0, "WARNING": 0, "INFO": 0}
+        hml_counts = {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
         issues: List[Dict[str, Any]] = []
         for r in results:
             extra = r.get("extra") or {}
-            sev = (extra.get("severity") or "").upper()
-            if sev in sev_counts:
-                sev_counts[sev] += 1
+            meta = extra.get("metadata") or {}
+            level = (extra.get("severity") or "").upper()
+            if level in level_counts:
+                level_counts[level] += 1
+
+            normalized = _normalize_semgrep_severity(extra)
+            hml_counts[normalized] += 1
+
             issues.append({
                 "rule_id": r.get("check_id", ""),
-                "severity": sev,
+                "severity": level,                       # raw rule level (ERROR/WARNING/INFO)
+                "severity_normalized": normalized,       # canonical HIGH/MEDIUM/LOW
+                "confidence": (meta.get("confidence") or ""),
+                "cwe": _as_str_list(meta.get("cwe")),
+                "owasp": _as_str_list(meta.get("owasp")),
                 "message": extra.get("message", ""),
                 "line_number": (r.get("start") or {}).get("line"),
                 "matched_lines": extra.get("lines", "").strip(),
@@ -210,9 +297,12 @@ def run_semgrep(snippet_path: str, semgrep_config: str = "auto") -> SemgrepResul
 
         return SemgrepResult(
             findings=len(results),
-            error=sev_counts["ERROR"],
-            warning=sev_counts["WARNING"],
-            info=sev_counts["INFO"],
+            high=hml_counts["HIGH"],
+            medium=hml_counts["MEDIUM"],
+            low=hml_counts["LOW"],
+            error=level_counts["ERROR"],
+            warning=level_counts["WARNING"],
+            info=level_counts["INFO"],
             rules_matched=rules_matched,
             issues=issues,
             errors=errors_list,
@@ -260,7 +350,10 @@ def run_static_scan(
     semgrep_result = SemgrepResult()
 
     if "bandit" in active_scanners:
-        logger.info("Running bandit for agent=%s vuln=%s iteration=%d", agent, vulnerability_id, iteration)
+        logger.info(
+            "Running bandit for agent=%s file=%s iteration=%d",
+            agent, Path(snippet_path).name, iteration + 1,
+        )
         bandit_result = run_bandit(snippet_path)
         if bandit_result.errors:
             logger.warning("Bandit errors: %s", bandit_result.errors)
@@ -271,15 +364,18 @@ def run_static_scan(
             )
 
     if "semgrep" in active_scanners:
-        logger.info("Running semgrep for agent=%s vuln=%s iteration=%d", agent, vulnerability_id, iteration)
+        logger.info(
+            "Running semgrep for agent=%s file=%s iteration=%d",
+            agent, Path(snippet_path).name, iteration + 1,
+        )
         semgrep_result = run_semgrep(snippet_path, effective_semgrep_packs)
         if semgrep_result.errors:
             logger.warning("Semgrep errors: %s", semgrep_result.errors)
         else:
             logger.info(
-                "Semgrep results: findings=%d (ERROR=%d WARNING=%d INFO=%d) rules=%s",
-                semgrep_result.findings, semgrep_result.error, semgrep_result.warning,
-                semgrep_result.info, semgrep_result.rules_matched,
+                "Semgrep results: findings=%d (HIGH=%d MEDIUM=%d LOW=%d) rules=%s",
+                semgrep_result.findings, semgrep_result.high, semgrep_result.medium,
+                semgrep_result.low, semgrep_result.rules_matched,
             )
 
     agent_log_dir = Path(logs_dir) / agent / vulnerability_id
@@ -290,14 +386,19 @@ def run_static_scan(
         "snippet_path": snippet_path,
         "language": language,
         "agent": agent,
-        "vulnerability_id": vulnerability_id,
+        # Use explicit filename field instead of legacy vulnerability id
+        "file": Path(snippet_path).name,
+        # Keep zero-based numeric index for internal compatibility
         "iteration": iteration,
+        # Human-facing 1-based iteration for logs
+        "iteration_display": iteration + 1,
         "bandit": {
             "high": bandit_result.high, "medium": bandit_result.medium, "low": bandit_result.low,
             "issues": bandit_result.issues, "errors": bandit_result.errors,
         },
         "semgrep": {
             "findings": semgrep_result.findings,
+            "high": semgrep_result.high, "medium": semgrep_result.medium, "low": semgrep_result.low,
             "error": semgrep_result.error, "warning": semgrep_result.warning, "info": semgrep_result.info,
             "rules_matched": semgrep_result.rules_matched,
             "issues": semgrep_result.issues, "errors": semgrep_result.errors,
@@ -307,7 +408,7 @@ def run_static_scan(
     logger.info("Static scan log written to %s", log_path)
 
     return StaticScanResult(
-        bandit=bandit_result,
+        # bandit=bandit_result,
         semgrep=semgrep_result,
         log_path=log_path,
     )

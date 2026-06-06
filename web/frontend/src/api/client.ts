@@ -100,21 +100,6 @@ export const actionsApi = {
       method: 'POST',
       body: JSON.stringify(params),
     }),
-  startScan: (runId: string, config?: string) =>
-    request<{ run_id: string; pid: number }>(`/api/runs/${runId}/scan`, {
-      method: 'POST',
-      body: JSON.stringify({ config: config || 'config/config.yaml' }),
-    }),
-  startBaselineScan: (params: { snippet?: string; base_code_dir?: string; semgrep_config?: string; config?: string }) =>
-    request<{ run_id: string; pid: number }>('/api/scan/baseline', {
-      method: 'POST',
-      body: JSON.stringify(params),
-    }),
-  startAdhocScan: (params: { snippet?: string; base_code_dir?: string; semgrep_config?: string; config?: string }) =>
-    request<{ run_id: string; pid: number }>('/api/scan/adhoc', {
-      method: 'POST',
-      body: JSON.stringify(params),
-    }),
   startTestRun: (params: { snippet?: string; model?: string; config?: string }) =>
     request<{ run_id: string; pid: number }>('/api/test-run', {
       method: 'POST',

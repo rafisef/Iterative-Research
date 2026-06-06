@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import json
 import random
-import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -33,7 +32,15 @@ from .agents import Agent
 from .io_utils import AI_CODE_DIR, ensure_dir, logger, read_text, write_text
 from .llm_client import get_llm_client
 from .static_scanner import detect_language
-from .vulnerabilities import Vulnerability
+from dataclasses import dataclass
+
+
+@dataclass
+class Vulnerability:
+    id: str
+    description: str
+    base_snippet_path: str
+    semgrep_config: str = ""
 
 
 # Lock for generation_log.jsonl writes — multiple threads append concurrently.
@@ -104,7 +111,9 @@ def generate_code(
         random.seed(int(seed))
 
     llm_cfg = config.get("llm", {})
-    request_delay = float(llm_cfg.get("request_delay_seconds", 10.0))
+    temperature = llm_cfg.get("temperature")
+    top_p = llm_cfg.get("top_p")
+    max_tokens = llm_cfg.get("max_tokens")
     active_model = model_override or llm_cfg.get("model", "gpt-4o")
     outputs_dir = run_dir / AI_CODE_DIR
     generation_log_path = run_dir / "generation_log.jsonl"
@@ -131,9 +140,10 @@ def generate_code(
         agent: Agent,
         iteration: int,
     ) -> None:
+        ext = Path(vuln_base_snippet_path).suffix
         vuln_language = detect_language(vuln_base_snippet_path)
         is_python = vuln_language == "python"
-        ext = ".py" if is_python else ".ts"
+        # ext = ".py" if is_python else ".ts"
 
         if iteration == 0:
             input_code = vuln_base_snippet
@@ -143,31 +153,31 @@ def generate_code(
                 input_code = read_text(prev_path)
             except FileNotFoundError:
                 logger.warning(
-                    "Previous snippet not found for agent=%s vuln=%s iteration=%d at %s; "
+                    "Previous snippet not found for agent=%s file=%s iteration=%d at %s; "
                     "falling back to base snippet.",
-                    agent.id, vuln_id, iteration, prev_path,
+                    agent.id, Path(vuln_base_snippet_path).name, iteration + 1, prev_path,
                 )
                 input_code = vuln_base_snippet
 
         instruction = agent.random_instruction()
         logger.info(
-            "Iteration %d for agent=%s vuln=%s | prompt=%s",
-            iteration, agent.id, vuln_id, instruction,
+            "Iteration %d for agent=%s file=%s | prompt=%s",
+            iteration + 1, agent.id, Path(vuln_base_snippet_path).name, instruction,
         )
-        time.sleep(10.0)
+
         generated_code = llm_client.generate_from_snippet(
             input_code, instruction, language=vuln_language,
         )
 
         if not generated_code.strip():
             logger.warning(
-                "Empty code generated for agent=%s vuln=%s iteration=%d",
-                agent.id, vuln_id, iteration,
+                "Empty code generated for agent=%s file=%s iteration=%d",
+                agent.id, Path(vuln_base_snippet_path).name, iteration + 1,
             )
         else:
             logger.info(
-                "LLM response received for agent=%s vuln=%s iteration=%d (%d chars).",
-                agent.id, vuln_id, iteration, len(generated_code),
+                "LLM response received for agent=%s file=%s iteration=%d (%d chars).",
+                agent.id, Path(vuln_base_snippet_path).name, iteration + 1, len(generated_code),
             )
 
         if is_python:
@@ -175,21 +185,26 @@ def generate_code(
                 compile(generated_code, "<generated-snippet>", "exec")
             except SyntaxError as exc:
                 logger.warning(
-                    "Generated code has syntax error for agent=%s vuln=%s iteration=%d: %s",
-                    agent.id, vuln_id, iteration, exc,
+                    "Generated code has syntax error for agent=%s file=%s iteration=%d: %s",
+                    agent.id, Path(vuln_base_snippet_path).name, iteration + 1, exc,
                 )
 
         agent_dir = outputs_dir / agent.id / vuln_id
         ensure_dir(agent_dir)
-        snippet_path = agent_dir / f"iteration_{iteration}{ext}"
+        snippet_path = agent_dir / f"iteration_{iteration + 1}{ext}"
         write_text(snippet_path, generated_code)
 
         log_entry = json.dumps({
             "agent": agent.id,
-            "vuln_id": vuln_id,
-            "iteration": iteration,
+            # Use explicit filename instead of vulnerability id in logs
+            "file": Path(vuln_base_snippet_path).name,
+            # Human-facing iteration numbering (1-based)
+            "iteration": iteration + 1,
             "prompt": instruction,
             "model": active_model,
+            "temperature": temperature,
+            "top_p": top_p,
+            "max_tokens": max_tokens
         })
         with _GENERATION_LOG_LOCK:
             with open(generation_log_path, "a", encoding="utf-8") as f:
@@ -208,8 +223,8 @@ def generate_code(
 
         for iteration in range(iterations):
             logger.info(
-                "Starting generation iteration %d for vuln=%s across %d agents (max_workers=%d)",
-                iteration, vuln.id, len(agents), max_workers,
+                "Starting generation iteration %d for file=%s across %d agents (max_workers=%d)",
+                    iteration + 1, Path(vuln.base_snippet_path).name, len(agents), max_workers,
             )
 
             if max_workers == 1:
@@ -289,7 +304,7 @@ def write_run_metadata(
 
 #: File extensions recognised as code snippets eligible for generation.
 _SNIPPET_EXTENSIONS: frozenset[str] = frozenset(
-    {".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"}
+    {".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".java", ".rb", ".php", ".swift", ".kt"}
 )
 
 

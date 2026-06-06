@@ -140,6 +140,13 @@ Each line is a JSON object with the following fields:
 | `nuclei_exit_code` | `int \| null` | Nuclei process exit code. `0` = completed with no findings. `null` = timed out, binary missing, or dry-run. |
 | `snippet_path` | `string` | Relative path to the generated Python snippet file. |
 | `log_path` | `string` | Relative path to the Nuclei scan log file. Empty string if no scan was run. |
+| `semgrep_findings` | `int` | Total Semgrep findings for this iteration. |
+| `semgrep_high` / `semgrep_medium` / `semgrep_low` | `int` | Canonical severity counts (`high + medium + low == semgrep_findings`), derived from each finding's true security severity in Semgrep `extra.metadata` (`severity` → `impact`), falling back to the rule level. |
+| `semgrep_error` / `semgrep_warning` / `semgrep_info` | `int` | Legacy Semgrep **rule-level** counts (ERROR/WARNING/INFO), retained for backward compatibility. |
+| `semgrep_issues` | `list` | Per-finding detail. Each entry: `rule_id`, `severity` (raw rule level), `severity_normalized` (HIGH/MEDIUM/LOW), `confidence`, `cwe` (list), `owasp` (list), `message`, `line_number`, `matched_lines`. |
+| `bandit_high` / `bandit_medium` / `bandit_low` | `int` | Bandit severity counts (Python snippets only; omitted for TypeScript). |
+| `bandit_issues` | `list` | Per-finding Bandit detail (Python only): `test_id`, `test_name`, `severity`, `confidence`, `line_number`, `issue_text`, `cwe_id`. |
+| `static_log_path` | `string` | Relative path to the combined Bandit + Semgrep static-scan JSON log. |
 
 ### Example Records
 

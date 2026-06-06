@@ -128,7 +128,10 @@ def _sync_results(db: Session, run_dir: Path, run_id: str) -> None:
         result = Result(
             run_id=run_id,
             agent=rec.get("agent", ""),
-            vulnerability_id=rec.get("vulnerability_id", ""),
+            # Prefer explicit 'file' field when present (newer logs); fall back
+            # to legacy 'vulnerability_id' for older runs.
+            # 'file' is the canonical identifier emitted in results.jsonl
+            vulnerability_id=rec.get("file", ""),
             iteration=rec.get("iteration", 0),
             prompt=rec.get("prompt", ""),
             model=rec.get("model", ""),
@@ -141,6 +144,9 @@ def _sync_results(db: Session, run_dir: Path, run_id: str) -> None:
             bandit_medium=rec.get("bandit_medium"),
             bandit_low=rec.get("bandit_low"),
             semgrep_findings=rec.get("semgrep_findings", 0),
+            semgrep_high=rec.get("semgrep_high", rec.get("semgrep_error", 0)),
+            semgrep_medium=rec.get("semgrep_medium", rec.get("semgrep_warning", 0)),
+            semgrep_low=rec.get("semgrep_low", rec.get("semgrep_info", 0)),
             semgrep_error=rec.get("semgrep_error", 0),
             semgrep_warning=rec.get("semgrep_warning", 0),
             semgrep_info=rec.get("semgrep_info", 0),

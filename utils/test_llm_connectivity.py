@@ -32,7 +32,7 @@ from framework.agents import resolve_agents_from_config
 from framework.io_utils import load_yaml_config, logger
 from framework.llm_client import detect_available_models, get_llm_client
 from framework.static_scanner import detect_language
-from framework.vulnerabilities import resolve_vulnerabilities_from_config
+from framework.generator import discover_snippets_from_dir
 
 
 def test_llm_connectivity(
@@ -90,7 +90,17 @@ def _check_single_model(config: dict, config_path: str, model: str) -> None:
         logger.error("No agents configured in %s — cannot run connectivity check.", config_path)
         sys.exit(1)
 
-    vuln = resolve_vulnerabilities_from_config([vuln_ids[0]])[0]
+    snippets_dir = Path(config.get("paths", {}).get("snippets_dir", "snippets"))
+    try:
+        discovered = {v.id: v for v in discover_snippets_from_dir(snippets_dir)}
+    except (FileNotFoundError, NotADirectoryError) as exc:
+        logger.error("%s", exc)
+        sys.exit(1)
+    try:
+        vuln = discovered[vuln_ids[0]]
+    except KeyError:
+        logger.error("Unknown vulnerability id in config: %s", vuln_ids[0])
+        sys.exit(1)
     agent = resolve_agents_from_config([agent_ids[0]], agents_cfg=config.get("agents", {}))[0]
     language = detect_language(vuln.base_snippet_path)
 
@@ -103,8 +113,8 @@ def _check_single_model(config: dict, config_path: str, model: str) -> None:
     instruction = agent.random_instruction()
 
     logger.info(
-        "Connectivity check — model=%s  vuln=%s  agent=%s  language=%s",
-        model, vuln.id, agent.id, language,
+        "Connectivity check — model=%s  file=%s  agent=%s  language=%s",
+        model, Path(vuln.base_snippet_path).name, agent.id, language,
     )
     logger.info("Prompt: %s", instruction)
 

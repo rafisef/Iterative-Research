@@ -15,13 +15,12 @@ import { ScannerConfigPanel } from '../components/common/ScannerConfigPanel';
 import { Tooltip } from '../components/common/Tooltip';
 import { Spinner } from '../components/common/Spinner';
 
-type RunType = 'experiment' | 'generate' | 'scan' | 'analyze' | 'test-run';
+type RunType = 'experiment' | 'generate' | 'analyze' | 'test-run';
 type CodeSource = 'none' | 'snippet' | 'base-code-dir';
 
 const RUN_TYPE_TOOLTIPS: Record<RunType, string> = {
   experiment: 'Generates code via LLM, runs static analysis, and produces an analysis report',
   generate: 'Generates code iterations from a base snippet using the configured LLM agents',
-  scan: 'Runs static analysis (Bandit/Semgrep) on code files or an existing run directory',
   analyze: 'Analyzes existing scan results (results.jsonl) and produces trend/delta reports',
   'test-run': 'Makes a single LLM call and scans the output — verifies connectivity without writing results',
 };
@@ -46,11 +45,9 @@ export function NewExperimentPage() {
   const [baseCodeDir, setBaseCodeDir] = useState('');
   const [logName, setLogName] = useState('');
   const [analyzeFilePath, setAnalyzeFilePath] = useState('');
-  const [baselineScan, setBaselineScan] = useState(false);
-  const [scanSourcePath, setScanSourcePath] = useState('');
 
   const [showBrowseModal, setShowBrowseModal] = useState(false);
-  const [browseTarget, setBrowseTarget] = useState<'snippet' | 'dir' | 'scan' | 'analyze'>('snippet');
+  const [browseTarget, setBrowseTarget] = useState<'snippet' | 'dir' | 'analyze'>('snippet');
   const [detectedLanguages, setDetectedLanguages] = useState<LanguageInfo[]>([]);
   const [semgrepConfig, setSemgrepConfig] = useState('');
 
@@ -112,12 +109,6 @@ export function NewExperimentPage() {
     else setDetectedLanguages([]);
   }, [effectivePath, detectLanguage]);
 
-  const scanEffectivePath = baselineScan ? scanSourcePath : '';
-  useEffect(() => {
-    if (scanEffectivePath) detectLanguage(scanEffectivePath);
-    else if (runType === 'scan') setDetectedLanguages([]);
-  }, [scanEffectivePath, detectLanguage, runType]);
-
   const toggleModel = (model: string) => {
     setSelectedModels((prev) => {
       const next = new Set(prev);
@@ -136,7 +127,7 @@ export function NewExperimentPage() {
     }
   };
 
-  const openBrowse = (target: 'snippet' | 'dir' | 'scan' | 'analyze') => {
+  const openBrowse = (target: 'snippet' | 'dir' | 'analyze') => {
     setBrowseTarget(target);
     setShowBrowseModal(true);
   };
@@ -148,8 +139,6 @@ export function NewExperimentPage() {
     } else if (browseTarget === 'dir') {
       setBaseCodeDir(path);
       setCodeSource('base-code-dir');
-    } else if (browseTarget === 'scan') {
-      setScanSourcePath(path);
     } else if (browseTarget === 'analyze') {
       setAnalyzeFilePath(path);
     }
@@ -186,27 +175,6 @@ export function NewExperimentPage() {
         case 'generate':
           result = await actionsApi.startGenerate(params);
           break;
-        case 'scan':
-          if (baselineScan && scanSourcePath) {
-            const isDir = scanSourcePath.endsWith('/');
-            result = await actionsApi.startBaselineScan({
-              snippet: !isDir ? scanSourcePath : undefined,
-              base_code_dir: isDir ? scanSourcePath : undefined,
-              semgrep_config: semgrepConfig || undefined,
-            });
-          } else if (scanSourcePath) {
-            const isDir = scanSourcePath.endsWith('/') || !scanSourcePath.includes('.');
-            result = await actionsApi.startAdhocScan({
-              snippet: !isDir ? scanSourcePath : undefined,
-              base_code_dir: isDir ? scanSourcePath : undefined,
-              semgrep_config: semgrepConfig || undefined,
-            });
-          } else {
-            setError('Please provide a path to scan');
-            setLoading(false);
-            return;
-          }
-          break;
         case 'analyze':
           if (!analyzeFilePath) {
             setError('Please provide a results.jsonl file path');
@@ -234,9 +202,7 @@ export function NewExperimentPage() {
   };
 
   const showCodeSource = runType === 'experiment' || runType === 'generate';
-  const showModelIterations = runType !== 'scan' && runType !== 'analyze';
-  const showScanConfig = (showCodeSource && detectedLanguages.length > 0 && runType === 'experiment')
-    || (runType === 'scan' && baselineScan && detectedLanguages.length > 0);
+  const showModelIterations = runType !== 'analyze';
 
   return (
     <div className="max-w-2xl">
@@ -247,11 +213,10 @@ export function NewExperimentPage() {
         {/* Run Type */}
         <fieldset>
           <legend className="text-sm font-medium text-slate-300 mb-3">Run Type</legend>
-          <div className="grid grid-cols-5 gap-2">
+          <div className="grid grid-cols-4 gap-2">
             {([
               ['experiment', 'Full Pipeline'],
               ['generate', 'Generate Only'],
-              ['scan', 'Scan Only'],
               ['analyze', 'Analyze Scan Results Only'],
               ['test-run', 'Test Run'],
             ] as [RunType, string][]).map(([val, label]) => (
@@ -274,54 +239,6 @@ export function NewExperimentPage() {
             ))}
           </div>
         </fieldset>
-
-        {/* Scan Only: source path + baseline checkbox */}
-        {runType === 'scan' && (
-          <div className="space-y-3">
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1">Code Source</label>
-              <div className="flex gap-2">
-                <div className="flex-1">
-                  <PathAutocomplete
-                    value={scanSourcePath}
-                    onChange={setScanSourcePath}
-                    placeholder="Run ID, file path, or directory..."
-                  />
-                </div>
-                <button
-                  type="button"
-                  onClick={() => openBrowse('scan')}
-                  className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-300 transition-colors"
-                  title="Browse files"
-                >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={baselineScan}
-                onChange={(e) => setBaselineScan(e.target.checked)}
-                className="accent-blue-500"
-              />
-              <span className="text-sm text-slate-300">Baseline Scan</span>
-              <span className="text-xs text-slate-500">(creates a new run directory with findings)</span>
-            </label>
-
-            {baselineScan && scanSourcePath && (
-              <>
-                <LanguageBadges languages={detectedLanguages} />
-                {showScanConfig && (
-                  <ScannerConfigPanel languages={detectedLanguages} onChange={setSemgrepConfig} />
-                )}
-              </>
-            )}
-          </div>
-        )}
 
         {/* Analyze Only: results.jsonl file picker */}
         {runType === 'analyze' && (
@@ -408,7 +325,7 @@ export function NewExperimentPage() {
         )}
 
         {/* Run ID */}
-        {runType !== 'scan' && runType !== 'analyze' && (
+        {runType !== 'analyze' && (
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1">
               Run ID <span className="text-slate-500">(optional, auto-generated if blank)</span>
@@ -520,7 +437,7 @@ export function NewExperimentPage() {
         )}
 
         {/* Log name */}
-        {runType !== 'scan' && runType !== 'analyze' && runType !== 'test-run' && (
+        {runType !== 'analyze' && runType !== 'test-run' && (
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1">
               Log file name <span className="text-slate-500">(optional)</span>

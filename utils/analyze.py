@@ -2,27 +2,24 @@
 """
 utils/analyze.py — Vulnerability trend analyzer for iterative LLM research results.
 
-Reads results.jsonl from a timestamped run directory and prints:
+Reads a results.jsonl file (produced by the scan stage) and prints:
   1. A summary header (record counts, agents, models, iteration range)
-  2. Per-agent trend tables (Bandit HIGH/MED, Semgrep findings with bar charts)
+  2. Per-agent trend tables (Bandit + Semgrep HIGH/MED/LOW with bar charts)
   3. Per-agent finding-type detail (specific test IDs, rule IDs, CWEs, messages)
   4. A delta summary (first → last iteration change per agent)
 
-All analysis logic lives in framework/analyzer.py; this script is a thin CLI
-wrapper responsible only for argument parsing and run-directory resolution.
+Optionally exports the data to CSV and/or a self-contained HTML report that
+visualizes the core research hypothesis from arXiv:2506.11022 — does the LLM
+introduce more security vulnerabilities after each iteration?
 
-Run discovery (in order of precedence):
-  --results path/to/results.jsonl  → load that file directly
-  --run 2026-03-18_14-30-00        → load runs/<run-id>/results.jsonl
-  --run runs/2026-03-18_14-30-00   → load from an explicit path
-  (none)                           → auto-detect the most recent run in runs/
+All analysis logic lives in framework/analyzer.py; this script is a thin CLI
+wrapper responsible only for argument parsing.
 
 Usage:
-  python utils/analyze.py                              # latest run
-  python utils/analyze.py --run 2026-03-18_14-30-00   # specific run by ID
-  python utils/analyze.py --list-runs                  # enumerate all runs
-  python utils/analyze.py --results results.jsonl      # explicit file (legacy)
-  python utils/analyze.py --csv out.csv --no-findings  # CSV export, no detail
+  python utils/analyze.py --list                                  # list run folders
+  python utils/analyze.py -f runs/<run-id>/results.jsonl          # print report
+  python utils/analyze.py -f runs/<run-id>/results.jsonl --csv out.csv
+  python utils/analyze.py -f runs/<run-id>/results.jsonl --html out.html
 """
 from __future__ import annotations
 
@@ -35,18 +32,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from framework.analyzer import (
-    analyze_run,
-    find_latest_results,
-    group_records,
-    list_runs,
-    load_results,
-    print_finding_types,
-    print_summary,
-    print_trend_table,
-    resolve_run_path,
-    write_csv,
-)
+from framework.analyzer import analyze_run, list_runs, write_html
 
 
 RUNS_DIR = "runs"
@@ -56,97 +42,58 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Analyze iterative LLM research results and print vulnerability trends."
     )
-
-    source_group = parser.add_mutually_exclusive_group()
-    source_group.add_argument(
-        "--results",
-        type=str,
-        default="",
-        help="Direct path to a results.jsonl file.",
-    )
-    source_group.add_argument(
-        "--run",
-        type=str,
-        default="",
-        metavar="RUN_ID_OR_PATH",
-        help=(
-            "Run ID (e.g. 2026-03-18_14-30-00) or path to a run directory. "
-            "Defaults to the most recent run in runs/."
-        ),
-    )
-    source_group.add_argument(
-        "--list-runs",
-        action="store_true",
-        help="List all available runs and exit.",
-    )
-
     parser.add_argument(
-        "--runs-dir",
+        "-f", "--file",
         type=str,
-        default=RUNS_DIR,
-        help=f"Root directory containing all run folders (default: {RUNS_DIR}).",
+        default="",
+        metavar="PATH",
+        help="Path to a results.jsonl file to analyze (required unless --list).",
+    )
+    parser.add_argument(
+        "--list",
+        action="store_true",
+        help="List the run folders under the runs/ directory and exit.",
     )
     parser.add_argument(
         "--csv",
         type=str,
         default="",
-        help="If provided, also write results to this CSV file path.",
+        metavar="PATH",
+        help="Output path for CSV results (one row per finding).",
     )
     parser.add_argument(
-        "--agent",
+        "--html",
         type=str,
         default="",
-        help="Filter output to a single agent ID.",
-    )
-    parser.add_argument(
-        "--vuln",
-        type=str,
-        default="",
-        help="Filter output to a single vulnerability ID.",
-    )
-    parser.add_argument(
-        "--no-findings",
-        action="store_true",
-        help="Skip the per-finding detail section; show only trend tables.",
+        metavar="PATH",
+        help="Output path for a self-contained HTML visualization of the data.",
     )
     args = parser.parse_args()
 
-    # --- Resolve which results.jsonl to load ----------------------------------
-    if args.list_runs:
-        list_runs(args.runs_dir)
+    if args.list:
+        list_runs(RUNS_DIR)
         return
 
-    if args.results:
-        results_path = args.results
-    elif args.run:
-        results_path = resolve_run_path(args.run, args.runs_dir)
-        if results_path is None:
-            print(
-                f"[error] Could not resolve run '{args.run}'. "
-                f"Use --list-runs to see available runs.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-    else:
-        results_path = find_latest_results(args.runs_dir)
-        if results_path is None:
-            print(
-                f"[error] No runs found in '{args.runs_dir}/'. "
-                "Run the experiment first: python main.py",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        print(f"[info] Auto-selected most recent run: {Path(results_path).parent.name}")
+    if not args.file:
+        parser.error("provide -f/--file <results.jsonl> (or use --list to see runs)")
 
-    # --- Delegate to framework/analyzer.py ------------------------------------
-    run_dir = Path(results_path).parent
+    results_path = Path(args.file)
+    if not results_path.is_file():
+        print(f"[error] results file not found: {results_path}", file=sys.stderr)
+        sys.exit(1)
+
+    run_dir = results_path.parent
+
+    # Print the full text report (and write CSV if requested).
     analyze_run(
         run_dir=run_dir,
-        vuln_filter=args.vuln or None,
-        agent_filter=args.agent or None,
-        include_findings=not args.no_findings,
+        results_path=str(results_path),
+        include_findings=True,
         csv_path=args.csv or None,
     )
+
+    if args.html:
+        write_html(run_dir, args.html, results_path=str(results_path))
 
 
 if __name__ == "__main__":

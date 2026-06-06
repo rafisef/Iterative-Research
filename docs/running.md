@@ -281,41 +281,36 @@ Outputs are written to `runs/<run-id>/ai-generated-code-snippets/`. A `run_metad
 
 ### Component 2 — Static Scanning
 
-Run Bandit / Semgrep against all generated output files in an existing run directory. Reads `run_metadata.json` to discover what to scan.
+Scan a single file or a directory (recursively) with Semgrep (and Bandit for Python) and write a `results.jsonl`. Exactly one of `--code-snippet-dir` / `--code-snippet-individual` is required.
 
 ```bash
-python utils/scan.py                              # scan the latest run
-python utils/scan.py --run 2026-04-01_11-34-04   # scan a specific run
-python utils/scan.py --run runs/my-run            # explicit path
-python utils/scan.py --semgrep-config "p/xss p/owasp-top-ten"   # override Semgrep rulesets
+# Single file
+python utils/scan.py --code-snippet-individual path/to/file.ts -o out/results.jsonl
+
+# Directory (recursive)
+python utils/scan.py --code-snippet-dir snippets/ -o out/results.jsonl
+
+# A run's generated outputs — agent/vuln/iteration are recovered from the paths
+python utils/scan.py --code-snippet-dir runs/my-run/ai-generated-code-snippets \
+    -o runs/my-run/results.jsonl --semgrep-config "p/xss p/owasp-top-ten"
 ```
 
-Results are appended to `runs/<run-id>/results.jsonl`.
-
-#### Baseline Scan Mode
-
-Scan arbitrary source files or directories to create a baseline of findings — no prior code generation run is needed.
-
-```bash
-python utils/scan.py --baseline-scan --snippet path/to/file.ts
-python utils/scan.py --baseline-scan --base-code-dir snippets/
-python utils/scan.py --baseline-scan --snippet myapp.py --semgrep-config "p/python p/bandit"
-```
-
-A standard run directory (`runs/baseline-<timestamp>/`) is created with `run_metadata.json` and `results.jsonl`, so baseline results appear alongside regular experiments and are analyzable with `utils/analyze.py`.
+| Flag | Description |
+|---|---|
+| `--code-snippet-dir <DIR>` | Directory of code snippets to scan recursively. |
+| `--code-snippet-individual <FILE>` | Path to an individual file to scan. |
+| `-o, --output <PATH>` | Output path for the `results.jsonl` scan file (required). |
+| `--semgrep-config <RULESETS>` | Space-separated Semgrep rule packs (default: `auto`). |
 
 ### Component 3 — Analysis
 
-Analyze scan results and print a human-readable report. Reads `results.jsonl`.
+Analyze scan results and print a human-readable report. Reads a `results.jsonl` file.
 
 ```bash
-python utils/analyze.py                                  # latest run (auto-detected)
-python utils/analyze.py --run 2026-03-31_21-49-13        # specific run by ID
-python utils/analyze.py --list-runs                      # enumerate all available runs
-python utils/analyze.py --vuln ts_injection              # filter to one vulnerability
-python utils/analyze.py --agent security                 # filter to one agent
-python utils/analyze.py --no-findings                    # trend tables only, skip per-finding detail
-python utils/analyze.py --csv out.csv                    # also export to CSV
+python utils/analyze.py --list                                   # list run folders under runs/
+python utils/analyze.py -f runs/2026-03-31_21-49-13/results.jsonl # print report for a run
+python utils/analyze.py -f <run>/results.jsonl --csv out.csv      # also export CSV
+python utils/analyze.py -f <run>/results.jsonl --html out.html    # also write HTML visualization
 ```
 
 ### Typical standalone workflow
@@ -325,10 +320,10 @@ python utils/analyze.py --csv out.csv                    # also export to CSV
 python utils/generate.py --run-id my-experiment
 
 # Step 2 — scan generated files
-python utils/scan.py --run my-experiment
+python utils/scan.py --code-snippet-dir runs/my-experiment/ai-generated-code-snippets -o runs/my-experiment/results.jsonl
 
 # Step 3 — analyze results
-python utils/analyze.py --run my-experiment
+python utils/analyze.py -f runs/my-experiment/results.jsonl
 ```
 
 ---
@@ -338,14 +333,16 @@ python utils/analyze.py --run my-experiment
 After a run completes (via `python main.py` or the standalone components), use `utils/analyze.py` to summarize findings:
 
 ```bash
-python utils/analyze.py                                  # latest run (auto-detected)
-python utils/analyze.py --run 2026-03-31_21-49-13        # specific run by ID
-python utils/analyze.py --list-runs                      # enumerate all available runs
-python utils/analyze.py --vuln ts_injection              # filter to one vulnerability
-python utils/analyze.py --agent security                 # filter to one agent
-python utils/analyze.py --no-findings                    # trend tables only, skip per-finding detail
-python utils/analyze.py --csv out.csv                    # also export to CSV
+python utils/analyze.py --list                                   # list run folders under runs/
+python utils/analyze.py -f runs/2026-03-31_21-49-13/results.jsonl # print report for a run
+python utils/analyze.py -f <run>/results.jsonl --csv out.csv      # also export CSV
+python utils/analyze.py -f <run>/results.jsonl --html out.html    # self-contained HTML visualization
 ```
+
+`--html` produces a self-contained HTML report (inline SVG, no internet needed) visualizing
+the hypothesis from [arXiv:2506.11022](https://arxiv.org/pdf/2506.11022): HIGH-severity findings
+per iteration by agent (line chart), HIGH/MEDIUM/LOW per iteration (stacked bars), and the
+aggregated data embedded as JSON for further statistics.
 
 The output includes:
 

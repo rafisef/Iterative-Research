@@ -40,11 +40,18 @@ def _run_to_dict(run: Run) -> dict:
 
 
 def _result_to_dict(r: Result) -> dict:
+    # Canonical HIGH/MEDIUM/LOW counts. Rows synced before metadata-based
+    # severity have these columns defaulted to 0 while the legacy rule-level
+    # columns are populated — fall back to them so old runs still render.
+    sg_high, sg_med, sg_low = r.semgrep_high or 0, r.semgrep_medium or 0, r.semgrep_low or 0
+    if sg_high == sg_med == sg_low == 0 and (r.semgrep_error or r.semgrep_warning or r.semgrep_info):
+        sg_high, sg_med, sg_low = r.semgrep_error or 0, r.semgrep_warning or 0, r.semgrep_info or 0
     return {
         "id": r.id,
         "run_id": r.run_id,
         "agent": r.agent,
-        "vulnerability_id": r.vulnerability_id,
+        # New canonical field: file (basename of the snippet)
+        "file": Path(r.snippet_path).name if r.snippet_path else r.vulnerability_id,
         "iteration": r.iteration,
         "prompt": r.prompt,
         "model": r.model,
@@ -57,6 +64,9 @@ def _result_to_dict(r: Result) -> dict:
         "bandit_medium": r.bandit_medium,
         "bandit_low": r.bandit_low,
         "semgrep_findings": r.semgrep_findings,
+        "semgrep_high": sg_high,
+        "semgrep_medium": sg_med,
+        "semgrep_low": sg_low,
         "semgrep_error": r.semgrep_error,
         "semgrep_warning": r.semgrep_warning,
         "semgrep_info": r.semgrep_info,
@@ -72,6 +82,7 @@ def _code_to_dict(c: GeneratedCode) -> dict:
         "run_id": c.run_id,
         "agent": c.agent,
         "vuln_id": c.vuln_id,
+        "file": Path(c.file_path).name if c.file_path else c.vuln_id,
         "iteration": c.iteration,
         "language": c.language,
         "file_path": c.file_path,
@@ -150,6 +161,9 @@ class ResultUpdateBody(BaseModel):
     bandit_medium: Optional[int] = None
     bandit_low: Optional[int] = None
     semgrep_findings: Optional[int] = None
+    semgrep_high: Optional[int] = None
+    semgrep_medium: Optional[int] = None
+    semgrep_low: Optional[int] = None
     semgrep_error: Optional[int] = None
     semgrep_warning: Optional[int] = None
     semgrep_info: Optional[int] = None

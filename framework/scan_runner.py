@@ -11,23 +11,22 @@ Responsibilities
   run_static_scan(), and append a ResultRecord to results.jsonl
 - Use ThreadPoolExecutor for parallelism (same as the original runner)
 - Operate on any run directory, including ones generated independently
-- Support baseline scanning of arbitrary files/directories
+- Stand-alone Semgrep scanning of an arbitrary file or directory (scan_files)
 
 Public API
 ----------
     run_scans(run_dir, config, max_workers, semgrep_config_override) -> None
-    scan_baseline(target, runs_dir, semgrep_config) -> Path
+    scan_files(target, output_path, semgrep_config) -> Path
 """
 from __future__ import annotations
 
 import json
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 from .io_utils import (
-    AI_CODE_DIR,
     ResultRecord,
     append_result_record,
     ensure_dir,
@@ -39,7 +38,14 @@ from .static_scanner import (
     detect_language,
     run_static_scan,
 )
-from .vulnerabilities import get_all_vulnerabilities
+
+
+# File extensions Semgrep (and Bandit, for .py) can scan.
+_SCANNABLE_EXTS = frozenset({
+    ".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
+    ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp",
+    ".java", ".rb", ".php", ".swift", ".kt",
+})
 
 
 def run_scans(
@@ -78,7 +84,6 @@ def run_scans(
     run_id: str = metadata.get("run_id", run_dir.name)
 
     generation_log = _load_generation_log(run_dir)
-    all_vulns = get_all_vulnerabilities()
 
     outputs_dir = resolve_code_dir(run_dir)
     logs_dir = run_dir / "logs"
@@ -86,29 +91,49 @@ def run_scans(
 
     ensure_dir(logs_dir)
 
+    # results.jsonl is written append-only, and run_scans always rescans the
+    # full agent × vuln × iteration set from run_metadata.json. Clear any prior
+    # results first so re-scanning a run *replaces* its records instead of
+    # appending a second copy (which previously produced duplicate rows).
+    results_path = Path(results_index)
+    if results_path.exists():
+        logger.info("Clearing existing results before rescan: %s", results_index)
+        results_path.unlink()
+
     max_workers = max(1, max_workers)
 
     def _scan_single(agent_id: str, vuln_id: str, iteration: int) -> None:
-        vuln = all_vulns.get(vuln_id)
-        if vuln is None:
-            logger.warning(
-                "Vulnerability '%s' not found in registry; "
-                "attempting scan with .ts extension and no semgrep override.",
-                vuln_id,
-            )
-            ext = ".ts"
+        # Prefer any generated snippet file's extension if present; otherwise
+        # fall back to the vulnerability registry (if it exists) to infer
+        # language/semgrep config, and finally default to TypeScript.
+        agent_dir = outputs_dir / agent_id / vuln_id
+        detected_ext = None
+        if agent_dir.exists() and agent_dir.is_dir():
+            for suf in (".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"):
+                cand = agent_dir / f"iteration_{iteration}{suf}"
+                if cand.exists():
+                    detected_ext = suf
+                    break
+
+        if detected_ext:
+            ext = detected_ext
             effective_semgrep = semgrep_config_override or ""
         else:
-            lang = detect_language(vuln.base_snippet_path)
-            ext = ".py" if lang == "python" else ".ts"
-            effective_semgrep = semgrep_config_override or vuln.semgrep_config
+            # No generated snippet found; default to TypeScript and no per-vuln overrides
+            ext = ".ts"
+            effective_semgrep = semgrep_config_override or ""
 
         snippet_path = outputs_dir / agent_id / vuln_id / f"iteration_{iteration}{ext}"
         if not snippet_path.exists():
             logger.warning("Output file not found, skipping scan: %s", snippet_path)
             return
 
-        prompt = generation_log.get((agent_id, vuln_id, iteration), "")
+        # Map prompts by filename — generation_log.jsonl uses 'file' as key.
+        try:
+            file_key = Path(snippet_path).name
+        except Exception:
+            file_key = vuln_id
+        prompt = generation_log.get((agent_id, file_key, iteration), "")
 
         static_result = run_static_scan(
             snippet_path=str(snippet_path),
@@ -137,6 +162,9 @@ def run_scans(
             bandit_medium=static_result.bandit.medium,
             bandit_low=static_result.bandit.low,
             semgrep_findings=static_result.semgrep.findings,
+            semgrep_high=static_result.semgrep.high,
+            semgrep_medium=static_result.semgrep.medium,
+            semgrep_low=static_result.semgrep.low,
             semgrep_error=static_result.semgrep.error,
             semgrep_warning=static_result.semgrep.warning,
             semgrep_info=static_result.semgrep.info,
@@ -155,7 +183,7 @@ def run_scans(
     ]
 
     logger.info(
-        "Scanning %d file(s) across %d agent(s), %d vuln(s), %d iteration(s) (max_workers=%d)",
+        "Scanning %d file(s) across %d agent(s), %d vulnerabilities, %d iteration(s) (max_workers=%d)",
         len(work_items), len(agent_ids), len(vuln_ids), iterations, max_workers,
     )
 
@@ -174,97 +202,113 @@ def run_scans(
     logger.info("Scanning complete. Results: %s", results_index)
 
 
-def scan_baseline(
+# ---------------------------------------------------------------------------
+# Stand-alone Semgrep scanning of an arbitrary file or directory
+# ---------------------------------------------------------------------------
+
+_ITERATION_RE = re.compile(r"iteration_(\d+)$")
+
+
+def _derive_record_keys(file_path: Path, root: Path) -> Tuple[str, str, int]:
+    """
+    Derive (agent, vulnerability_id, iteration) for a scanned file.
+
+    When the file sits in the generator's conventional layout —
+    ``<agent>/<vuln>/iteration_<N>.<ext>`` relative to *root* — those values are
+    recovered so the records remain compatible with the per-iteration analysis.
+    Otherwise it falls back to agent="scan", vulnerability_id=<file stem>,
+    iteration=0.
+    """
+    try:
+        rel = file_path.relative_to(root)
+    except ValueError:
+        rel = Path(file_path.name)
+    parts = rel.parts
+    m = _ITERATION_RE.match(file_path.stem)
+    if m and len(parts) >= 3:
+        return parts[-3], parts[-2], int(m.group(1))
+    return "scan", file_path.stem, 0
+
+
+def scan_files(
     target: str | Path,
-    runs_dir: str = "runs",
-    semgrep_config: str = "",
+    output_path: str | Path,
+    *,
+    semgrep_config: str = "auto",
+    max_workers: int = 1,
 ) -> Path:
     """
-    Scan arbitrary file(s) to establish a baseline of findings.
-
-    Creates a standard run directory (runs/baseline-<timestamp>/) with
-    run_metadata.json and results.jsonl so baseline scans appear alongside
-    regular experiment runs.
+    Scan a single file or a directory (recursively) with the static analysers
+    and write a ``results.jsonl`` to *output_path*.
 
     Parameters
     ----------
     target:
-        Path to a single file or directory of code to scan.
-    runs_dir:
-        Root directory for all runs.
+        A single source file, or a directory whose scannable files are scanned
+        recursively.
+    output_path:
+        Destination path for the results.jsonl file. Its parent directory is
+        created if needed; a ``logs/`` folder is written alongside it.
     semgrep_config:
-        Optional Semgrep rule packs override (space-separated).
+        Space-separated Semgrep rule packs (e.g. "p/xss p/owasp-top-ten").
+        Defaults to "auto" (Semgrep auto-detection).
 
     Returns
     -------
-    Path to the created run directory.
+    Path to the written results.jsonl file.
     """
     target_path = Path(target).resolve()
     if not target_path.exists():
-        raise FileNotFoundError(f"Baseline scan target not found: {target_path}")
+        raise FileNotFoundError(f"Scan target not found: {target_path}")
 
     if target_path.is_file():
         files = [target_path]
+        root = target_path.parent
     else:
         files = sorted(
             f for f in target_path.rglob("*")
-            if f.is_file() and f.suffix in {".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"}
+            if f.is_file() and f.suffix.lower() in _SCANNABLE_EXTS
         )
+        root = target_path
 
     if not files:
         raise ValueError(f"No scannable source files found in {target_path}")
 
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    run_dir = ensure_dir(Path(runs_dir) / f"baseline-{timestamp}")
-    logs_dir = ensure_dir(run_dir / "logs")
-    results_index = str(run_dir / "results.jsonl")
+    output_path = Path(output_path)
+    out_dir = output_path.parent if str(output_path.parent) else Path(".")
+    ensure_dir(out_dir)
+    logs_dir = ensure_dir(out_dir / "logs")
 
-    vuln_ids_seen: List[str] = []
-    for src_file in files:
-        vuln_id = src_file.stem
-        if vuln_id not in vuln_ids_seen:
-            vuln_ids_seen.append(vuln_id)
+    # Idempotent: a re-scan replaces results.jsonl rather than appending to it.
+    if output_path.exists():
+        logger.info("Clearing existing results before scan: %s", output_path)
+        output_path.unlink()
+    results_index = str(output_path)
 
-    languages_seen = set()
-    for src_file in files:
-        languages_seen.add(detect_language(str(src_file)))
+    run_id = out_dir.resolve().name or "scan"
 
-    metadata = {
-        "run_id": run_dir.name,
-        "timestamp": timestamp,
-        "mode": "baseline",
-        "target": str(target_path),
-        "agents": ["baseline"],
-        "vulnerabilities": vuln_ids_seen,
-        "iterations": 1,
-        "model": "n/a",
-    }
-    (run_dir / "run_metadata.json").write_text(
-        json.dumps(metadata, indent=2), encoding="utf-8"
-    )
+    logger.info("Scanning %d file(s) under %s → %s (max_workers=%d)", len(files), target_path, output_path, max_workers)
 
-    logger.info(
-        "Baseline scan: %d file(s) in %s → %s", len(files), target_path, run_dir
-    )
+    max_workers = max(1, int(max_workers))
 
-    for src_file in files:
-        vuln_id = src_file.stem
+    def _scan_one(src_file: Path) -> None:
+        agent, vuln_id, iteration = _derive_record_keys(src_file, root)
         language = detect_language(str(src_file))
         scanners_used = _ENABLED_SCANNERS.get(language, ["semgrep"])
 
         static_result = run_static_scan(
             snippet_path=str(src_file),
-            agent="baseline",
+            agent=agent,
             vulnerability_id=vuln_id,
-            iteration=0,
+            iteration=iteration,
             logs_dir=str(logs_dir),
             semgrep_config_override=semgrep_config,
         )
 
         record = ResultRecord(
-            agent="baseline",
+            agent=agent,
             vulnerability_id=vuln_id,
-            iteration=0,
+            iteration=iteration,
             prompt="",
             model="n/a",
             success=True,
@@ -276,121 +320,30 @@ def scan_baseline(
             bandit_medium=static_result.bandit.medium,
             bandit_low=static_result.bandit.low,
             semgrep_findings=static_result.semgrep.findings,
+            semgrep_high=static_result.semgrep.high,
+            semgrep_medium=static_result.semgrep.medium,
+            semgrep_low=static_result.semgrep.low,
             semgrep_error=static_result.semgrep.error,
             semgrep_warning=static_result.semgrep.warning,
             semgrep_info=static_result.semgrep.info,
             static_log_path=static_result.log_path,
             bandit_issues=static_result.bandit.issues,
             semgrep_issues=static_result.semgrep.issues,
-            run_id=run_dir.name,
+            run_id=run_id,
         )
         append_result_record(results_index, record, scanners_used=scanners_used)
 
-    logger.info("Baseline scan complete. Results: %s", results_index)
-    return run_dir
-
-
-def scan_adhoc(
-    target: str | Path,
-    runs_dir: str = "runs",
-    semgrep_config: str = "",
-) -> Path:
-    """
-    Run semgrep on an arbitrary file or directory (ad-hoc scan).
-
-    Unlike scan_baseline (which tags results as agent="baseline" for
-    distinguishing original code), this creates results tagged with
-    agent="scan" — used for re-scanning AI-generated output or any
-    arbitrary code without the baseline label.
-
-    Creates a standard run directory (runs/scan-<timestamp>/) with
-    run_metadata.json and results.jsonl.
-    """
-    target_path = Path(target).resolve()
-    if not target_path.exists():
-        raise FileNotFoundError(f"Adhoc scan target not found: {target_path}")
-
-    if target_path.is_file():
-        files = [target_path]
+    if max_workers == 1:
+        for src_file in files:
+            _scan_one(src_file)
     else:
-        files = sorted(
-            f for f in target_path.rglob("*")
-            if f.is_file() and f.suffix in {".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"}
-        )
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(_scan_one, f) for f in files]
+            for future in as_completed(futures):
+                future.result()
 
-    if not files:
-        raise ValueError(f"No scannable source files found in {target_path}")
-
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    run_dir = ensure_dir(Path(runs_dir) / f"scan-{timestamp}")
-    logs_dir = ensure_dir(run_dir / "logs")
-    results_index = str(run_dir / "results.jsonl")
-
-    vuln_ids_seen: List[str] = []
-    for src_file in files:
-        vuln_id = src_file.stem
-        if vuln_id not in vuln_ids_seen:
-            vuln_ids_seen.append(vuln_id)
-
-    metadata = {
-        "run_id": run_dir.name,
-        "timestamp": timestamp,
-        "mode": "adhoc",
-        "target": str(target_path),
-        "agents": ["scan"],
-        "vulnerabilities": vuln_ids_seen,
-        "iterations": 1,
-        "model": "n/a",
-    }
-    (run_dir / "run_metadata.json").write_text(
-        json.dumps(metadata, indent=2), encoding="utf-8"
-    )
-
-    logger.info(
-        "Adhoc scan: %d file(s) in %s → %s", len(files), target_path, run_dir
-    )
-
-    for src_file in files:
-        vuln_id = src_file.stem
-        language = detect_language(str(src_file))
-        scanners_used = _ENABLED_SCANNERS.get(language, ["semgrep"])
-
-        static_result = run_static_scan(
-            snippet_path=str(src_file),
-            agent="scan",
-            vulnerability_id=vuln_id,
-            iteration=0,
-            logs_dir=str(logs_dir),
-            semgrep_config_override=semgrep_config,
-        )
-
-        record = ResultRecord(
-            agent="scan",
-            vulnerability_id=vuln_id,
-            iteration=0,
-            prompt="",
-            model="n/a",
-            success=True,
-            server_started=False,
-            nuclei_exit_code=None,
-            snippet_path=str(src_file),
-            log_path="",
-            bandit_high=static_result.bandit.high,
-            bandit_medium=static_result.bandit.medium,
-            bandit_low=static_result.bandit.low,
-            semgrep_findings=static_result.semgrep.findings,
-            semgrep_error=static_result.semgrep.error,
-            semgrep_warning=static_result.semgrep.warning,
-            semgrep_info=static_result.semgrep.info,
-            static_log_path=static_result.log_path,
-            bandit_issues=static_result.bandit.issues,
-            semgrep_issues=static_result.semgrep.issues,
-            run_id=run_dir.name,
-        )
-        append_result_record(results_index, record, scanners_used=scanners_used)
-
-    logger.info("Adhoc scan complete. Results: %s", results_index)
-    return run_dir
+    logger.info("Scan complete. Results: %s", results_index)
+    return output_path
 
 
 def _load_generation_log(run_dir: Path) -> Dict[Tuple[str, str, int], str]:
@@ -411,7 +364,9 @@ def _load_generation_log(run_dir: Path) -> Dict[Tuple[str, str, int], str]:
             continue
         try:
             entry = json.loads(line)
-            key = (entry["agent"], entry["vuln_id"], int(entry["iteration"]))
+            # generation_log.jsonl uses 1-based iteration numbers for human
+            # readability; convert back to a zero-based internal index here.
+            key = (entry["agent"], entry.get("file", ""), int(entry["iteration"]) - 1)
             result[key] = entry.get("prompt", "")
         except (json.JSONDecodeError, KeyError, ValueError):
             logger.warning("Skipping malformed entry in generation_log.jsonl: %s", line[:80])

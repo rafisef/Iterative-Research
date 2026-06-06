@@ -128,20 +128,18 @@ Nuclei scans with the `xss` tag detect the presence (or absence) of these contro
 
 ---
 
-## Vulnerability Registry
+## Snippet-based discovery (no registry)
 
-Vulnerabilities are looked up by ID at runner startup:
+This codebase no longer requires a central vulnerability registry. Instead,
+every snippet file under `snippets/` (or a user-specified base directory) is
+treated as an ad-hoc experiment target. Each discovered file becomes a
+single experiment item identified by its filename (exposed as the `file`
+field in logs and results). This avoids maintaining a separate registry and
+lets you run experiments against any file tree.
 
-```python
-def resolve_vulnerabilities_from_config(vuln_ids: List[str]) -> List[Vulnerability]:
-    all_vulns = get_all_vulnerabilities()
-    for vid in vuln_ids:
-        if vid not in all_vulns:
-            raise KeyError(f"Unknown vulnerability id: {vid}")
-    ...
-```
-
-An unknown ID causes an immediate `KeyError` before any LLM calls are made.
+If you previously added entries to `framework/vulnerabilities.py`, remove them
+and instead place the base snippet under `snippets/` and reference the file
+in `config/config.yaml` using the `--snippet` or `--base-code-dir` options.
 
 ---
 

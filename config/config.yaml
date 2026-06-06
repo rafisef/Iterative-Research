@@ -3,46 +3,53 @@ llm:
   # Examples:
   #   OpenAI:     gpt-4o, gpt-4o-mini
   #   Ollama:     ollama/codellama, ollama/llama3.2, ollama/deepseek-coder  (free, local)
-  #   Groq:       groq/llama-3.3-70b-versatile  (free tier, requires GROQ_API_KEY)
   #   Anthropic:  anthropic/claude-3-5-sonnet-20241022  (requires ANTHROPIC_API_KEY)
+  #   Gemini:     gemini/gemini-2.5-flash  (requires GEMINI_API_KEY)
+  #   Grok:       xai/grok-4  (requires XAI_API_KEY)
   model: gpt-4o
+  # model: xai/grok-4
   temperature: 0.7
   top_p: 1
-  max_tokens: 2000
+  max_tokens: 4096
   request_delay_seconds: 10.0
 
 experiment:
-  iterations: 10
+  iterations: 2
 
-  vulnerabilities:
-    # ── Python ──────────────────────────────────────────────────────────────
-    # Base snippet: snippets/python/injection/xss_comment_page_base.py
-    # Scanners applied automatically: Bandit + Semgrep
-    - injection_xss_comment_page
+  # vulnerabilities:
+  #   # ── Python ──────────────────────────────────────────────────────────────
+  #   # Base snippet: snippets/python/injection/xss_comment_page_base.py
+  #   # Scanners applied automatically: Bandit + Semgrep
+  #   - injection_xss_comment_page
 
-    # ── TypeScript ──────────────────────────────────────────────────────────
-    # Base snippets live under snippets/typescript/<category>/
-    # Scanners applied automatically: Semgrep
-    # Comment out any you don't want to include in a given run.
-    - ts_input_validation
-    - ts_concurrency
-    - ts_information_leakage
-    - ts_access_control
-    - ts_injection
-    - ts_race_condition
-    - ts_error_handling
+  #   # ── TypeScript ──────────────────────────────────────────────────────────
+  #   # Base snippets live under snippets/typescript/<category>/
+  #   # Scanners applied automatically: Semgrep
+  #   # Comment out any you don't want to include in a given run.
+  #   - ts_input_validation
+  #   - ts_concurrency
+  #   - ts_information_leakage
+  #   - ts_access_control
+  #   - ts_injection
+  #   - ts_race_condition
+  #   - ts_error_handling
 
   agents:
     - efficiency
-    - feature
-    - security
-    - ambiguous
+    # - feature
+    # - security
+    # - ambiguous
   # Set a fixed integer seed for reproducible prompt selection across runs.
   # Remove or set to null to use non-deterministic (random) selection.
-  random_seed: null
+  random_seed: 42
   # Maximum number of worker threads used to process agents in parallel for
   # each iteration. Set to 1 to run everything sequentially.
-  max_workers: 1
+  # Default max_workers used unless more specific keys are provided below.
+  max_workers: 4
+  # Optional: override workers specifically for generation and scanning stages.
+  # If unset, each defaults to the value of `max_workers` above.
+  generate_workers: 4
+  scan_workers: 8
 
 # Scanner selection is automatic — no configuration needed here.
 # The framework detects the language from each snippet's file extension and
@@ -64,11 +71,11 @@ paths:
   #   logs/       — static scan logs
   #   results.jsonl       — JSONL record for every iteration in this run
   #   run_metadata.json   — config snapshot for reproducibility
-  runs_dir: runs
+  runs_dir: ai-generated-code
   # Base snippets directory. Language sub-folders:
   #   snippets/python/<category>/     — Python base snippets
   #   snippets/typescript/<category>/ — TypeScript base snippets
-  snippets_dir: snippets
+  snippets_dir: code-snippets
 
 # ── Agent definitions ────────────────────────────────────────────────────────
 # Each key matches an agent ID listed under experiment.agents.

@@ -81,9 +81,14 @@ class ResultRecord:
   bandit_medium: int = 0
   bandit_low: int = 0
   semgrep_findings: int = 0
-  semgrep_error: int = 0     # ERROR severity (HIGH) — likely vulnerabilities
-  semgrep_warning: int = 0   # WARNING severity (MEDIUM) — potential issues
-  semgrep_info: int = 0      # INFO severity (LOW) — informational
+  # Canonical severity buckets (derived from Semgrep metadata when available).
+  semgrep_high: int = 0      # HIGH severity — likely vulnerabilities
+  semgrep_medium: int = 0    # MEDIUM severity — potential issues
+  semgrep_low: int = 0       # LOW severity — informational
+  # Legacy rule-level buckets, retained for backward compatibility.
+  semgrep_error: int = 0     # ERROR rule level
+  semgrep_warning: int = 0   # WARNING rule level
+  semgrep_info: int = 0      # INFO rule level
   static_log_path: str = ""
   # Per-finding detail lists — each entry is a dict with tool-specific keys.
   # Bandit keys: test_id, test_name, severity, confidence, line_number, issue_text, cwe_id.
@@ -95,7 +100,12 @@ class ResultRecord:
 
 
 _BANDIT_FIELDS = {"bandit_high", "bandit_medium", "bandit_low", "bandit_issues"}
-_SEMGREP_FIELDS = {"semgrep_findings", "semgrep_error", "semgrep_warning", "semgrep_info", "semgrep_issues"}
+_SEMGREP_FIELDS = {
+    "semgrep_findings",
+    "semgrep_high", "semgrep_medium", "semgrep_low",
+    "semgrep_error", "semgrep_warning", "semgrep_info",
+    "semgrep_issues",
+}
 
 
 def result_record_to_dict(
@@ -107,6 +117,19 @@ def result_record_to_dict(
   that weren't used (e.g. no bandit keys for TypeScript-only scans).
   """
   d = asdict(record)
+  # Add a human-friendly filename field derived from the snippet path and
+  # remove the legacy vulnerability_id key from emitted JSON.
+  try:
+    d["file"] = Path(record.snippet_path).name
+  except Exception:
+    d["file"] = ""
+  # Add a human-friendly 1-based iteration field for logs and UI consumers.
+  try:
+    d["iteration_display"] = int(record.iteration) + 1
+  except Exception:
+    d["iteration_display"] = record.iteration
+  # Remove legacy key to avoid writing it to JSON logs/results.
+  d.pop("vulnerability_id", None)
   if scanners_used is not None:
     if "bandit" not in scanners_used:
       for key in _BANDIT_FIELDS:

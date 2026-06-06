@@ -14,7 +14,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from framework.vulnerabilities import get_all_vulnerabilities
+from framework.generator import discover_snippets_from_dir
 from framework.llm_client import PROVIDER_DEFAULTS, detect_available_models
 from framework.static_scanner import detect_language
 
@@ -28,16 +28,20 @@ _KNOWN_ENV_VARS = [env for env, _ in PROVIDER_DEFAULTS]
 @router.get("/vulnerabilities")
 async def list_vulnerabilities():
     """Return all registered vulnerabilities."""
-    all_vulns = get_all_vulnerabilities()
+    snippets_dir = _REPO_ROOT / "snippets"
+    try:
+        vulns = discover_snippets_from_dir(snippets_dir)
+    except (FileNotFoundError, NotADirectoryError):
+        return []
     return [
         {
             "id": v.id,
             "description": v.description,
             "base_snippet_path": v.base_snippet_path,
-            "semgrep_config": v.semgrep_config,
+            "semgrep_config": getattr(v, "semgrep_config", ""),
             "language": detect_language(v.base_snippet_path),
         }
-        for v in all_vulns.values()
+        for v in vulns
     ]
 
 

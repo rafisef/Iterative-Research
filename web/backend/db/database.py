@@ -32,6 +32,9 @@ def _migrate_add_columns() -> None:
 
     existing = {col["name"] for col in inspector.get_columns("results")}
     new_cols = {
+        "semgrep_high": "INTEGER DEFAULT 0",
+        "semgrep_medium": "INTEGER DEFAULT 0",
+        "semgrep_low": "INTEGER DEFAULT 0",
         "semgrep_error": "INTEGER DEFAULT 0",
         "semgrep_warning": "INTEGER DEFAULT 0",
         "semgrep_info": "INTEGER DEFAULT 0",

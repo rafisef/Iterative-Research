@@ -9,12 +9,11 @@ from typing import Dict, List
 
 from .agents import resolve_agents_from_config
 from .analyzer import analyze_run
-from .generator import discover_snippets_from_dir, generate_code, write_run_metadata
+from .generator import discover_snippets_from_dir, generate_code, write_run_metadata, Vulnerability
 from .io_utils import AI_CODE_DIR, ensure_dir, load_yaml_config, logger, read_text
 from .llm_client import detect_available_models, get_llm_client
 from .scan_runner import run_scans
 from .static_scanner import detect_language, run_static_scan
-from .vulnerabilities import Vulnerability, resolve_vulnerabilities_from_config
 
 
 _TEST_RUN_DEFAULT_SNIPPET = "snippets/typescript/leakage/info_leakage_user_safe_base.ts"
@@ -137,25 +136,25 @@ def _execute_test_run(
       for agent in agents:
         instruction = agent.random_instruction()
         logger.info(
-          "Test-run iteration %d for agent=%s vuln=%s | prompt=%s",
-          iteration, agent.id, vuln.id, instruction,
+          "Test-run iteration %d for agent=%s file=%s | prompt=%s",
+          iteration + 1, agent.id, Path(vuln.base_snippet_path).name, instruction,
         )
         generated_code = llm_client.generate_from_snippet(
           base_snippet, instruction, language=vuln_language,
         )
         if not generated_code.strip():
           logger.warning(
-            "Empty code generated for agent=%s vuln=%s iteration=%d",
-            agent.id, vuln.id, iteration,
+            "Empty code generated for agent=%s file=%s iteration=%d",
+            agent.id, Path(vuln.base_snippet_path).name, iteration + 1,
           )
         else:
           logger.info(
-            "LLM response received for agent=%s vuln=%s iteration=%d (%d chars).",
-            agent.id, vuln.id, iteration, len(generated_code),
+            "LLM response received for agent=%s file=%s iteration=%d (%d chars).",
+            agent.id, Path(vuln.base_snippet_path).name, iteration + 1, len(generated_code),
           )
         logger.info(
-          "Test-run complete for agent=%s vuln=%s iteration=%d — no files written.",
-          agent.id, vuln.id, iteration,
+          "Test-run complete for agent=%s file=%s iteration=%d — no files written.",
+          agent.id, Path(vuln.base_snippet_path).name, iteration + 1,
         )
 
   # Static scan of the specified snippet file.
@@ -307,6 +306,9 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
   vuln_ids = experiment_cfg.get("vulnerabilities", [])
   seed = experiment_cfg.get("random_seed")
   max_workers = max(1, int(experiment_cfg.get("max_workers", 1)))
+  # Stage-specific worker overrides (optional): generate_workers / scan_workers
+  generate_workers = max(1, int(experiment_cfg.get("generate_workers", max_workers)))
+  scan_workers = max(1, int(experiment_cfg.get("scan_workers", max_workers)))
 
   paths_cfg = config.get("paths", {})
   runs_dir = paths_cfg.get("runs_dir", "runs")
@@ -372,7 +374,21 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
       len(vulns), base_code_dir_arg,
     )
   else:
-    vulns = resolve_vulnerabilities_from_config(vuln_ids)
+    # Resolve vulnerabilities from the configured snippets directory.
+    snippets_dir = Path(paths_cfg.get("snippets_dir", "snippets"))
+    try:
+      discovered = {v.id: v for v in discover_snippets_from_dir(snippets_dir)}
+    except (FileNotFoundError, NotADirectoryError) as exc:
+      logger.error("%s", exc)
+      sys.exit(1)
+    if vuln_ids:
+      try:
+        vulns = [discovered[vid] for vid in vuln_ids]
+      except KeyError as e:
+        logger.error("Unknown vulnerability id in config: %s", e)
+        sys.exit(1)
+    else:
+      vulns = list(discovered.values())
 
   # --test-run: scope to the first vuln and first agent for a minimal check.
   if test_run_flag:
@@ -398,22 +414,24 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
     )
   else:
     snippet_banner_line = ""
-  logger.info(
-    "\n%s\n%-*s%s\n%-*s%s\n%-*s%s\n%-*s%s\n%-*s%s\n%-*s%s\n%-*s%s%s\n%s",
-    separator,
-    col, "Random seed",   seed if seed is not None else "none",
-    col, "Run ID",        run_id,
-    col, "Run dir",       run_dir.resolve(),
-    col, "LLM Provider",  f"model={active_model}",
-    col, "Configuration", (
-      f"iterations={iterations}  temperature={llm_cfg.get('temperature')}  "
-      f"top_p={llm_cfg.get('top_p')}  max_tokens={llm_cfg.get('max_tokens')}"
-    ),
-    col, "Scanners",      scanners_line,
-    col, "Metadata",      meta_path,
-    snippet_banner_line,
-    separator,
+  # Build a nicely-aligned startup banner using f-strings to avoid logging
+  # interpolation errors when messages contain percent-like sequences.
+  banner = (
+    f"\n{separator}\n"
+    f"{('Random seed'):<{col}}{seed if seed is not None else 'none'}\n"
+    f"{('Run ID'):<{col}}{run_id}\n"
+    f"{('Run dir'):<{col}}{run_dir.resolve()}\n"
+    f"{('LLM Provider'):<{col}}{'model=' + active_model}\n"
+    f"{('Configuration'):<{col}}"
+    f"iterations={iterations}  temperature={llm_cfg.get('temperature')}  "
+    f"top_p={llm_cfg.get('top_p')}  max_tokens={llm_cfg.get('max_tokens')}\n"
+    f"{('Scanners'):<{col}}{scanners_line}\n"
+    f"{('Workers'):<{col}}{'generate=' + str(generate_workers) + ' scan=' + str(scan_workers) + ' (per-iteration)'}\n"
+    f"{('Metadata'):<{col}}{meta_path}\n"
+    f"{snippet_banner_line}\n"
+    f"{separator}"
   )
+  logger.info(banner)
 
   # --test-run: lightweight single-call check — no output files or results.jsonl.
   if test_run_flag:
@@ -450,7 +468,7 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
     agents=agents,
     vulns=vulns,
     iterations=iterations,
-    max_workers=max_workers,
+    max_workers=generate_workers,
     seed=seed,
     model_override=active_model,
     test_run_snippet=test_run_snippet,
@@ -458,7 +476,7 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
     base_code_dir_arg=base_code_dir_arg,
   )
 
-  run_scans(run_dir=run_dir, config=config, max_workers=max_workers)
+  run_scans(run_dir=run_dir, config=config, max_workers=scan_workers)
 
   analyze_run(run_dir=run_dir)
 

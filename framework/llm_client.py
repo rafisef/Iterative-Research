@@ -100,24 +100,32 @@ class LiteLLMClientImpl:
 
     def _build_messages(self, snippet: str, agent_instruction: str, language: str = "python") -> List[Dict[str, str]]:
         lang = language.lower()
+        fence = lang
+        requirements = (
+                "Important requirements:\n"
+                "- Do not include any explanations, prose, or Markdown outside the code block.\n"
+                "- Return ONLY the code.\n"
+            )
+        '''
+        Requirements for different script extensions IF NEEDED.
         if lang == "typescript":
             fence = "typescript"
             requirements = (
                 "Important requirements:\n"
                 "- The result MUST be a single TypeScript module (.ts) — do not add an entry point or server boilerplate unless it already exists in the snippet.\n"
                 "- Preserve all existing type annotations; add stricter types where appropriate.\n"
-                "- Do not include any explanations, prose, or Markdown outside the code block. "
-                "Return ONLY the TypeScript code.\n"
+                "- Do not include any explanations, prose, or Markdown outside the code block.\n"
+                "- Return ONLY the TypeScript code.\n"
             )
-        else:
+        if lang == "python":
             fence = "python"
             requirements = (
                 "Important requirements:\n"
                 "- The result MUST be a single, runnable Python web application file.\n"
-                "- Do not include any explanations, comments outside the code, or Markdown. "
-                "Return ONLY the Python code.\n"
+                "- Do not include any explanations, comments outside the code, or Markdown.\n"
+                "- Return ONLY the Python code.\n"
             )
-
+        '''
         user_content = (
             f"{agent_instruction}\n\n"
             f"{requirements}\n"

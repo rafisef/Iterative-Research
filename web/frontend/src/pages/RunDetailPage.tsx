@@ -60,13 +60,6 @@ export function RunDetailPage() {
     else if (codes.length > 0) setActiveTab('code');
   }, [results.length, codes.length]);
 
-  const handleScan = async () => {
-    if (!runId) return;
-    const res = await actionsApi.startScan(runId);
-    setActivePid(res.pid);
-    setRun((prev) => prev ? { ...prev, status: 'scanning' } : prev);
-  };
-
   const handleKill = async () => {
     if (activePid) {
       await actionsApi.killProcess(activePid);
@@ -132,11 +125,6 @@ export function RunDetailPage() {
           </div>
         </div>
         <div className="flex gap-2">
-          {run.status === 'complete' && results.length === 0 && (
-            <button onClick={handleScan} className="px-3 py-2 text-sm bg-amber-600 hover:bg-amber-700 rounded-lg text-white transition-colors">
-              Run Scans
-            </button>
-          )}
           {isActive && activePid && (
             <button onClick={handleKill} className="px-3 py-2 text-sm bg-red-600 hover:bg-red-700 rounded-lg text-white transition-colors">
               Kill Process
@@ -248,9 +236,9 @@ export function RunDetailPage() {
                     {hasBandit && <th className="text-center px-3 py-2 text-red-400 font-medium">B:HIGH</th>}
                     {hasBandit && <th className="text-center px-3 py-2 text-amber-400 font-medium">B:MED</th>}
                     {hasBandit && <th className="text-center px-3 py-2 text-yellow-400 font-medium">B:LOW</th>}
-                    <th className="text-center px-3 py-2 text-red-400 font-medium">S:ERR</th>
-                    <th className="text-center px-3 py-2 text-amber-400 font-medium">S:WARN</th>
-                    <th className="text-center px-3 py-2 text-blue-400 font-medium">S:INFO</th>
+                    <th className="text-center px-3 py-2 text-red-400 font-medium">S:HIGH</th>
+                    <th className="text-center px-3 py-2 text-amber-400 font-medium">S:MED</th>
+                    <th className="text-center px-3 py-2 text-blue-400 font-medium">S:LOW</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -280,13 +268,13 @@ export function RunDetailPage() {
                           </td>
                         )}
                         <td className="px-3 py-2 text-center font-mono">
-                          <span className={r.semgrep_error > 0 ? 'text-red-400' : 'text-slate-600'}>{r.semgrep_error}</span>
+                          <span className={(r.semgrep_high ?? r.semgrep_error ?? 0) > 0 ? 'text-red-400' : 'text-slate-600'}>{r.semgrep_high ?? r.semgrep_error ?? 0}</span>
                         </td>
                         <td className="px-3 py-2 text-center font-mono">
-                          <span className={r.semgrep_warning > 0 ? 'text-amber-400' : 'text-slate-600'}>{r.semgrep_warning}</span>
+                          <span className={(r.semgrep_medium ?? r.semgrep_warning ?? 0) > 0 ? 'text-amber-400' : 'text-slate-600'}>{r.semgrep_medium ?? r.semgrep_warning ?? 0}</span>
                         </td>
                         <td className="px-3 py-2 text-center font-mono">
-                          <span className={r.semgrep_info > 0 ? 'text-blue-400' : 'text-slate-600'}>{r.semgrep_info}</span>
+                          <span className={(r.semgrep_low ?? r.semgrep_info ?? 0) > 0 ? 'text-blue-400' : 'text-slate-600'}>{r.semgrep_low ?? r.semgrep_info ?? 0}</span>
                         </td>
                       </tr>
                       {expandedResult === r.id && (
@@ -362,18 +350,24 @@ function FindingsDetail({ result, showBandit }: { result: ResultRecord; showBand
         </div>
       ))}
       {semgrep.map((issue, i) => {
+        // Prefer the canonical HIGH/MEDIUM/LOW severity; fall back to the raw
+        // rule level (ERROR/WARNING/INFO) for records written before metadata.
+        const levelToHml: Record<string, string> = { ERROR: 'HIGH', WARNING: 'MEDIUM', INFO: 'LOW' };
+        const sev = issue.severity_normalized || levelToHml[issue.severity] || issue.severity;
         const sevColors: Record<string, string> = {
-          ERROR: 'bg-red-500/20 text-red-400',
-          WARNING: 'bg-amber-500/20 text-amber-400',
-          INFO: 'bg-blue-500/20 text-blue-400',
+          HIGH: 'bg-red-500/20 text-red-400',
+          MEDIUM: 'bg-amber-500/20 text-amber-400',
+          LOW: 'bg-blue-500/20 text-blue-400',
         };
-        const sevStyle = sevColors[issue.severity] || 'bg-slate-500/20 text-slate-400';
+        const sevStyle = sevColors[sev] || 'bg-slate-500/20 text-slate-400';
+        const cwe = (issue.cwe && issue.cwe.length > 0) ? issue.cwe.join(', ') : null;
         return (
         <div key={`s-${i}`} className="p-2 bg-slate-900 rounded border border-slate-800">
           <div className="flex items-center gap-2 mb-1">
             <span className="px-1.5 py-0.5 bg-purple-500/20 text-purple-400 rounded text-[10px] font-medium">SEMGREP</span>
-            <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${sevStyle}`}>{issue.severity}</span>
+            <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${sevStyle}`}>{sev}</span>
             <span className="text-slate-300 font-medium">{issue.rule_id}</span>
+            {cwe && <span className="text-slate-500">{cwe}</span>}
             <span className="text-slate-500">line {issue.line_number}</span>
           </div>
           <p className="text-slate-400">{issue.message}</p>
@@ -417,9 +411,9 @@ function AnalysisView({ analysis, hasBandit }: { analysis: AnalysisData; hasBand
                 {hasBandit && <th className="text-center px-2 py-1 text-red-400">B:HIGH</th>}
                 {hasBandit && <th className="text-center px-2 py-1 text-amber-400">B:MED</th>}
                 {hasBandit && <th className="text-center px-2 py-1 text-yellow-400">B:LOW</th>}
-                <th className="text-center px-2 py-1 text-red-400">S:ERR</th>
-                <th className="text-center px-2 py-1 text-amber-400">S:WARN</th>
-                <th className="text-center px-2 py-1 text-blue-400">S:INFO</th>
+                <th className="text-center px-2 py-1 text-red-400">S:HIGH</th>
+                <th className="text-center px-2 py-1 text-amber-400">S:MED</th>
+                <th className="text-center px-2 py-1 text-blue-400">S:LOW</th>
                 <th className="text-left px-2 py-1 text-slate-400">Prompt</th>
               </tr>
             </thead>
@@ -443,13 +437,13 @@ function AnalysisView({ analysis, hasBandit }: { analysis: AnalysisData; hasBand
                     </td>
                   )}
                   <td className="px-2 py-1.5 text-center">
-                    <MetricBar value={row.semgrep_error} max={Math.max(...t.rows.map((r) => r.semgrep_error), 1)} color="red" />
+                    <MetricBar value={row.semgrep_high ?? 0} max={Math.max(...t.rows.map((r) => r.semgrep_high ?? 0), 1)} color="red" />
                   </td>
                   <td className="px-2 py-1.5 text-center">
-                    <MetricBar value={row.semgrep_warning} max={Math.max(...t.rows.map((r) => r.semgrep_warning), 1)} color="amber" />
+                    <MetricBar value={row.semgrep_medium ?? 0} max={Math.max(...t.rows.map((r) => r.semgrep_medium ?? 0), 1)} color="amber" />
                   </td>
                   <td className="px-2 py-1.5 text-center">
-                    <MetricBar value={row.semgrep_info} max={Math.max(...t.rows.map((r) => r.semgrep_info), 1)} color="blue" />
+                    <MetricBar value={row.semgrep_low ?? 0} max={Math.max(...t.rows.map((r) => r.semgrep_low ?? 0), 1)} color="blue" />
                   </td>
                   <td className="px-2 py-1.5 text-slate-500 truncate max-w-[200px]">{row.prompt}</td>
                 </tr>
@@ -470,9 +464,9 @@ function AnalysisView({ analysis, hasBandit }: { analysis: AnalysisData; hasBand
                 {hasBandit && <th className="text-center px-2 py-1 text-red-400">B:HIGH</th>}
                 {hasBandit && <th className="text-center px-2 py-1 text-amber-400">B:MED</th>}
                 {hasBandit && <th className="text-center px-2 py-1 text-yellow-400">B:LOW</th>}
-                <th className="text-center px-2 py-1 text-red-400">S:ERR</th>
-                <th className="text-center px-2 py-1 text-amber-400">S:WARN</th>
-                <th className="text-center px-2 py-1 text-blue-400">S:INFO</th>
+                <th className="text-center px-2 py-1 text-red-400">S:HIGH</th>
+                <th className="text-center px-2 py-1 text-amber-400">S:MED</th>
+                <th className="text-center px-2 py-1 text-blue-400">S:LOW</th>
               </tr>
             </thead>
             <tbody>
@@ -483,9 +477,9 @@ function AnalysisView({ analysis, hasBandit }: { analysis: AnalysisData; hasBand
                   {hasBandit && <td className="px-2 py-1.5 text-center"><DeltaValue value={d.bandit_high_delta ?? 0} /></td>}
                   {hasBandit && <td className="px-2 py-1.5 text-center"><DeltaValue value={d.bandit_medium_delta ?? 0} /></td>}
                   {hasBandit && <td className="px-2 py-1.5 text-center"><DeltaValue value={d.bandit_low_delta ?? 0} /></td>}
-                  <td className="px-2 py-1.5 text-center"><DeltaValue value={d.semgrep_error_delta} /></td>
-                  <td className="px-2 py-1.5 text-center"><DeltaValue value={d.semgrep_warning_delta} /></td>
-                  <td className="px-2 py-1.5 text-center"><DeltaValue value={d.semgrep_info_delta} /></td>
+                  <td className="px-2 py-1.5 text-center"><DeltaValue value={d.semgrep_high_delta} /></td>
+                  <td className="px-2 py-1.5 text-center"><DeltaValue value={d.semgrep_medium_delta} /></td>
+                  <td className="px-2 py-1.5 text-center"><DeltaValue value={d.semgrep_low_delta} /></td>
                 </tr>
               ))}
             </tbody>

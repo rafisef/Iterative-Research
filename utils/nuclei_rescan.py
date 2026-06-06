@@ -501,13 +501,13 @@ def main() -> None:
 
     for idx, rec in enumerate(to_scan):
         agent = rec.get("agent", "unknown")
-        vuln_id = rec.get("vulnerability_id", "unknown")
+        vuln_id = rec.get("file", "unknown")
         iteration = rec.get("iteration", -1)
         snippet_path = rec["snippet_path"]
 
         log.info(
             "[%d/%d] agent=%-12s  iter=%d  snippet=%s",
-            idx + 1, len(to_scan), agent, iteration, snippet_path,
+            idx + 1, len(to_scan), agent, iteration + 1, snippet_path,
         )
 
         nuclei_log_path = logs_dir / agent / vuln_id / f"nuclei_iteration_{iteration}.log"
@@ -544,7 +544,8 @@ def main() -> None:
             "scanned_at": datetime.now().isoformat(),
             "run_id": run_dir.name,
             "agent": agent,
-            "vulnerability_id": vuln_id,
+            # Use 'file' as the canonical identifier in output JSON.
+            "file": vuln_id,
             "iteration": iteration,
             "snippet_path": snippet_path,
             "server_started": server_started,
