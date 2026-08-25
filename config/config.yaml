@@ -8,13 +8,15 @@ llm:
   #   Grok:       xai/grok-4  (requires XAI_API_KEY)
   model: gpt-4o
   # model: xai/grok-4
+  # model: gpt-5
+  # model: 
   temperature: 0.7
   top_p: 1
   max_tokens: 4096
   request_delay_seconds: 10.0
 
 experiment:
-  iterations: 2
+  iterations: 10
 
   # vulnerabilities:
   #   # ── Python ──────────────────────────────────────────────────────────────
@@ -36,9 +38,9 @@ experiment:
 
   agents:
     - efficiency
-    # - feature
-    # - security
-    # - ambiguous
+    - feature
+    - security
+    - ambiguous
   # Set a fixed integer seed for reproducible prompt selection across runs.
   # Remove or set to null to use non-deterministic (random) selection.
   random_seed: 42

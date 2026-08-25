@@ -6,9 +6,5 @@ gunicorn>=21.2.0
 requests>=2.31.0
 bandit>=1.7.0
 setuptools<81
-# Web UI
-fastapi>=0.115.0
-uvicorn[standard]>=0.32.0
-sqlalchemy>=2.0.0
 # Semgrep is installed in a separate venv at ~/.venvs/semgrep-env
 # to avoid pydantic version conflicts. See docs/running.md for setup.

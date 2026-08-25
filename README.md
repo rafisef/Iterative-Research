@@ -8,7 +8,7 @@ A Python framework for recreating and extending the experiment described in the 
 
 The paper demonstrates that iterative LLM-driven code "improvement" paradoxically _introduces_ security vulnerabilities, finding a **37.6% increase in critical vulnerabilities** after just five iterations across 400 code samples and four distinct prompting strategies.
 
-This framework automates the experiment loop: it takes base code snippets, repeatedly asks an LLM to "improve" them using four different prompting strategies (agents), runs static analysis (Bandit + Semgrep) on every generated file, and optionally runs dynamic scanning (Nuclei) against a live server. Every run is saved in a timestamped directory so results are reproducible and easy to compare. A web UI is also included for launching experiments and exploring results interactively.
+This framework automates the experiment loop: it takes base code snippets, repeatedly asks an LLM to "improve" them using four different prompting strategies (agents), runs static analysis (Bandit + Semgrep) on every generated file, and optionally runs dynamic scanning (Nuclei) against a live server. Every run is saved in a timestamped directory so results are reproducible and easy to compare.
 
 ---
 
@@ -23,7 +23,6 @@ Each line: {"agent", "file", "iteration", "prompt", "model"}
 - [Running Individual Pipeline Components](#running-individual-pipeline-components)
 - [Analyzing Results](#analyzing-results)
 - [Nuclei Rescan (Optional)](#nuclei-rescan-optional)
-- [Web UI](#web-ui)
 - [Output and Results Schema](#output-and-results-schema)
 - [Agents (Prompting Strategies)](#agents-prompting-strategies)
 - [Vulnerabilities](#vulnerabilities)
@@ -55,14 +54,13 @@ Iterative-Research/
 │   └── config.yaml                        # Central experiment configuration
 ├── framework/
 │   ├── agents.py                          # Agent dataclass + config resolver
-│   ├── analyzer.py                        # Analysis component: trend tables, CSV export, JSON API
+│   ├── analyzer.py                        # Analysis component: trend tables, CSV export, HTML visualization
 │   ├── generator.py                       # Generation component: LLM calls, output files, metadata
 │   ├── io_utils.py                        # Logging, config loading, file I/O, ResultRecord
 │   ├── llm_client.py                      # LiteLLM wrapper (multi-provider LLM support)
 │   ├── runner.py                          # Main pipeline entrypoint + CLI argument parsing
 │   ├── scan_runner.py                     # Scanning component: runs static analysis, writes results.jsonl
 │   ├── scanner.py                         # Nuclei dynamic scan integration
-│   ├── server_runner.py                   # Flask snippet server lifecycle (used by Nuclei rescan)
 │   ├── static_scanner.py                  # Bandit + Semgrep static analysis + language detection
 │   └── vulnerabilities.py                 # Vulnerability registry (Python + TypeScript)
 ├── snippets/
@@ -90,18 +88,6 @@ Iterative-Research/
 │   ├── nuclei_rescan.py                   # CLI wrapper: Nuclei dynamic re-scanning post-run
 │   ├── scan.py                            # CLI wrapper: Semgrep-scan a file or directory → results.jsonl
 │   └── test_llm_connectivity.py           # Connectivity check: one LLM call, nothing written to disk
-├── web/
-│   ├── run.sh                             # Convenience script: start backend + frontend together
-│   ├── backend/
-│   │   ├── app.py                         # FastAPI application entrypoint
-│   │   ├── requirements.txt               # Backend-specific dependencies
-│   │   ├── api/                           # REST API routers (config, runs, experiments, vulns)
-│   │   ├── db/                            # SQLAlchemy models, database init, run sync
-│   │   └── services/                      # Process manager, WebSocket log streaming
-│   └── frontend/                          # React + TypeScript + Vite UI
-│       └── src/
-│           ├── pages/                     # Dashboard, NewExperiment, RunDetail, Config, Tools
-│           └── components/                # Layout, common UI, log viewer
 ├── docs/                                  # Extended documentation
 │   ├── agents.md
 │   ├── architecture.md
@@ -182,7 +168,7 @@ cd Iterative-Research
 python3 -m venv ai-research-env
 source ai-research-env/bin/activate
 
-# 2. Install Python dependencies (includes Bandit, LiteLLM, FastAPI, etc.)
+# 2. Install Python dependencies (includes Bandit, LiteLLM, etc.)
 pip install -r requirements.txt
 
 # 3. Create an isolated Semgrep virtual environment (avoids pydantic version conflicts)
@@ -220,11 +206,8 @@ The framework uses [LiteLLM](https://docs.litellm.ai/), which lets you switch pr
 | `PyYAML` | `>=6.0` | YAML config loading |
 | `Flask` | `>=3.0.0` | Web framework used by generated Python snippets |
 | `gunicorn` | `>=21.2.0` | WSGI server available to generated snippets |
-| `requests` | `>=2.31.0` | Health check polling in `server_runner.py` |
+| `requests` | `>=2.31.0` | Health check polling in Nuclei rescan |
 | `bandit` | `>=1.7.0` | Static analysis for Python snippets |
-| `fastapi` | `>=0.115.0` | Web UI backend |
-| `uvicorn` | `>=0.32.0` | ASGI server for FastAPI |
-| `sqlalchemy` | `>=2.0.0` | ORM / database layer for the web UI |
 
 ---
 
@@ -598,45 +581,6 @@ Nuclei is **not** required for the main experiment pipeline.
 
 ---
 
-## Web UI
-
-A browser-based interface is included for launching experiments and exploring results without using the CLI.
-
-### Starting the web UI
-
-```bash
-cd web
-bash run.sh
-```
-
-Or start the components individually:
-
-```bash
-# Backend (FastAPI + uvicorn)
-cd web/backend
-pip install -r requirements.txt
-uvicorn app:app --reload --port 8000
-
-# Frontend (React + Vite)
-cd web/frontend
-npm install
-npm run dev
-```
-
-The frontend runs at `http://localhost:5173` and communicates with the backend at `http://localhost:8000`.
-
-### Features
-
-- **Dashboard** — overview of all runs with key metadata (model, iterations, record count)
-- **New Experiment** — launch a run with a form-based UI; configuration is read from `config/config.yaml`
-- **Run Detail** — per-run trend tables, finding breakdowns, and raw results browsing
-- **Live logs** — real-time log streaming via WebSocket during active runs
-- **Config editor** — view and edit `config/config.yaml` from the browser
-- **Tools** — baseline scan and ad-hoc scan utilities
-
-The backend auto-syncs existing `runs/` directories into its SQLite database on startup so prior CLI runs appear in the dashboard immediately.
-
----
 
 ## Output and Results Schema
 

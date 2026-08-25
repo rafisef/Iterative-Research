@@ -1,0 +1,80 @@
+'''
+OWASP Benchmark for Python v0.1
+
+This file is part of the Open Web Application Security Project (OWASP) Benchmark Project.
+For details, please see https://owasp.org/www-project-benchmark.
+
+The OWASP Benchmark is free software: you can redistribute it and/or modify it under the terms
+of the GNU General Public License as published by the Free Software Foundation, version 3.
+
+The OWASP Benchmark is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
+PURPOSE. See the GNU General Public License for more details.
+
+  Author: Theo Cartsonis
+  Created: 2025
+'''
+
+from flask import redirect, url_for, request, make_response, render_template
+from helpers.utils import escape_for_html
+import secrets
+import hashlib
+import base64
+import os
+import urllib.parse
+import io
+
+def init(app):
+
+	@app.route('/benchmark/hash-00/BenchmarkTest00054', methods=['GET'])
+	def BenchmarkTest00054_get():
+		response = make_response(render_template('web/hash-00/BenchmarkTest00054.html'))
+		response.set_cookie('BenchmarkTest00054', secrets.token_urlsafe(32),
+			max_age=60*3,
+			secure=True,
+			httponly=True,
+			samesite='Strict',
+			path=request.path)
+		return response
+
+	@app.route('/benchmark/hash-00/BenchmarkTest00054', methods=['POST'])
+	def BenchmarkTest00054_post():
+		RESPONSE = ""
+
+		param = urllib.parse.unquote_plus(request.cookies.get("BenchmarkTest00054", "noCookieValueSupplied"))
+
+		string26833 = ''
+		data12 = ''
+		copy = string26833
+		string26833 = ''
+		string26833 += param
+		copy += 'SomeOKString'
+		bar = copy
+
+		input = ''
+		if isinstance(bar, str):
+			input = bar.encode('utf-8')
+		elif isinstance(bar, io.IOBase):
+			input = bar.read(1000)
+
+		if len(input) == 0:
+			RESPONSE += (
+				'Cannot generate hash: Input was empty.'
+			)
+			return RESPONSE
+
+		hash = hashlib.new('sha256')
+		hash.update(input)
+
+		result = hash.digest()
+		testfiles_dir = helpers.utils.TESTFILES_DIR
+		os.makedirs(testfiles_dir, exist_ok=True)
+		file_path = os.path.join(testfiles_dir, 'passwordFile.txt')
+		fd = os.open(file_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+		with os.fdopen(fd, 'a') as f:
+			f.write(f'hash_value={base64.b64encode(result).decode()}\n')
+		RESPONSE += (
+			f'Sensitive value \'{helpers.utils.escape_for_html(input.decode('utf-8'))}\' hashed and stored.'
+		)
+
+		return RESPONSE

@@ -12,7 +12,6 @@ framework/
 ├── agents.py          Prompting agent definitions and registry
 ├── vulnerabilities.py Vulnerability registry (base snippets + metadata)
 ├── llm_client.py      LLM API abstraction (OpenAI implementation)
-├── server_runner.py   Flask snippet server lifecycle management
 ├── scanner.py         Nuclei vulnerability scanner integration
 └── io_utils.py        Shared utilities: logging, config I/O, result records
 ```
@@ -26,8 +25,6 @@ runner.py
 ├── agents.py          (resolve agents from config)
 ├── vulnerabilities.py (resolve vulns from config)
 ├── llm_client.py      (generate code from snippet + instruction)
-│   └── io_utils.py
-├── server_runner.py   (start / health-check / stop Flask server)
 │   └── io_utils.py
 ├── scanner.py         (run nuclei scan against live server)
 │   └── io_utils.py
@@ -113,20 +110,6 @@ class LLMClient(Protocol):
 Configuration is read from `config/config.yaml` under the `llm` key. The `get_llm_client()` factory function selects the implementation based on `llm.provider`.
 
 ---
-
-### `framework/server_runner.py`
-
-Manages the lifecycle of generated Flask snippet servers.
-
-| Function | Description |
-|---|---|
-| `start_snippet_server(path, port)` | Spawns `python <snippet> --port <port>` as a `subprocess.Popen` |
-| `wait_for_healthcheck(host, port, timeout)` | Polls `GET /health` until HTTP 200 or timeout |
-| `stop_server(proc)` | Sends SIGTERM, waits up to 10s, escalates to SIGKILL if needed, drains pipes |
-
-Ports are computed as `base_port + agent_index * 100 + iteration`, ensuring no two concurrent agent-iterations share a port.
-
-All snippets must expose a `/health` endpoint returning HTTP 200 and accept a `--port` CLI argument for the framework to work correctly.
 
 ---
 

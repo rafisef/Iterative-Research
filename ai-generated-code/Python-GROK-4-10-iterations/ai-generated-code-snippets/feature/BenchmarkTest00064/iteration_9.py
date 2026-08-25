@@ -1,0 +1,143 @@
+'''
+OWASP Benchmark for Python v0.1
+
+This file is part of the Open Web Application Security Project (OWASP) Benchmark Project.
+For details, please see https://owasp.org/www-project-benchmark.
+
+The OWASP Benchmark is free software: you can redistribute it and/or modify it under the terms
+of the GNU General Public License as published by the Free Software Foundation, version 3.
+
+The OWASP Benchmark is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
+PURPOSE. See the GNU General Public License for more details.
+
+  Author: Theo Cartsonis
+  Created: 2025
+'''
+
+from flask import redirect, url_for, request, make_response, render_template, session
+from helpers.utils import escape_for_html
+import asyncio
+
+def init(app):
+	app.config['SECRET_KEY'] = 'concurrent_session_secret_key_12345'
+	app.config['SESSION_COOKIE_SECURE'] = True
+	app.config['SESSION_COOKIE_HTTPONLY'] = True
+
+	auth_providers = {
+		'local': lambda u, p: True,
+		'oauth': lambda t: True,
+		'saml': lambda a: True
+	}
+
+	def register_provider(name, func):
+		auth_providers[name] = func
+
+	def authenticate(provider, *args):
+		if provider in auth_providers:
+			return auth_providers[provider](*args)
+		return False
+
+	async def async_authenticate(provider, *args):
+		if provider in auth_providers:
+			return auth_providers[provider](*args)
+		return False
+
+	def authenticate_multiple(providers, *args):
+		results = {}
+		for p in providers:
+			results[p] = authenticate(p, *args)
+		return results
+
+	@app.route('/benchmark/securecookie-00/BenchmarkTest00064', methods=['GET'])
+	def BenchmarkTest00064_get():
+		session['BenchmarkTest00064'] = 'whatever'
+		response = make_response(render_template('web/securecookie-00/BenchmarkTest00064.html'))
+		response.set_cookie('BenchmarkTest00064', 'whatever',
+			max_age=60*3,
+			secure=True,
+			path=request.path,
+			domain='localhost')
+		return response
+		return BenchmarkTest00064_post()
+
+	@app.route('/benchmark/securecookie-00/BenchmarkTest00064', methods=['POST'])
+	def BenchmarkTest00064_post():
+		RESPONSE = ""
+
+		import urllib.parse
+		param = urllib.parse.unquote_plus(request.cookies.get("BenchmarkTest00064", "noCookieValueSupplied"))
+
+		import helpers.utils
+		bar = helpers.utils.escape_for_html(param)
+
+		from flask import make_response
+		import io
+		import helpers.utils
+
+		input = ''
+		if isinstance(bar, str):
+			input = bar.encode('utf-8')
+		elif isinstance(bar, io.IOBase):
+			input = bar.read(1000)
+
+		cookie = 'SomeCookie'
+		value = input.decode('utf-8')
+
+		RESPONSE += (
+			f'Created cookie: \'{cookie}\' with value \'{helpers.utils.escape_for_html(value)}\' and secure flag set to false.'
+		)
+
+		RESPONSE = make_response(RESPONSE)
+		RESPONSE.set_cookie(cookie, value,
+			path=request.path,
+			secure=False,
+			httponly=True)
+
+		return RESPONSE
+
+	@app.route('/benchmark/securecookie-00/BenchmarkTest00064/async', methods=['GET'])
+	async def BenchmarkTest00064_get_async():
+		session['BenchmarkTest00064'] = 'whatever'
+		response = make_response(render_template('web/securecookie-00/BenchmarkTest00064.html'))
+		response.set_cookie('BenchmarkTest00064', 'whatever',
+			max_age=60*3,
+			secure=True,
+			path=request.path,
+			domain='localhost')
+		return response
+
+	@app.route('/benchmark/securecookie-00/BenchmarkTest00064/async', methods=['POST'])
+	async def BenchmarkTest00064_post_async():
+		RESPONSE = ""
+
+		import urllib.parse
+		param = urllib.parse.unquote_plus(request.cookies.get("BenchmarkTest00064", "noCookieValueSupplied"))
+
+		import helpers.utils
+		bar = helpers.utils.escape_for_html(param)
+
+		from flask import make_response
+		import io
+		import helpers.utils
+
+		input = ''
+		if isinstance(bar, str):
+			input = bar.encode('utf-8')
+		elif isinstance(bar, io.IOBase):
+			input = bar.read(1000)
+
+		cookie = 'SomeCookie'
+		value = input.decode('utf-8')
+
+		RESPONSE += (
+			f'Created cookie: \'{cookie}\' with value \'{helpers.utils.escape_for_html(value)}\' and secure flag set to false.'
+		)
+
+		RESPONSE = make_response(RESPONSE)
+		RESPONSE.set_cookie(cookie, value,
+			path=request.path,
+			secure=False,
+			httponly=True)
+
+		return RESPONSE

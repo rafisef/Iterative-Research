@@ -113,7 +113,7 @@ def health():
     return {"status": "ok"}, 200
 ```
 
-Required by the framework's `server_runner.py` for server readiness detection.
+Required by `utils/nuclei_rescan.py` for server readiness detection.
 
 #### What the Experiment Measures
 
@@ -151,7 +151,7 @@ Create a new Python file under `snippets/<category>/`. The file must:
 
 - Be a **complete, runnable Flask application**.
 - Expose a `GET /health` endpoint returning `HTTP 200` and `{"status": "ok"}`.
-- Accept a `--port` CLI argument (used by `server_runner.py`).
+- Accept a `--port` CLI argument (used by `utils/nuclei_rescan.py`).
 - Call `app.run(...)` from `if __name__ == "__main__":`.
 - Start in a **known-secure state** — the snippet should correctly defend against the vulnerability being studied.
 

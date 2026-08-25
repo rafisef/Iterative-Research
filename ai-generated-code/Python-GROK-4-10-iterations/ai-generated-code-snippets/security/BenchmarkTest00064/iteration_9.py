@@ -1,0 +1,55 @@
+'''
+OWASP Benchmark for Python v0.1
+
+This file is part of the Open Web Application Security Project (OWASP) Benchmark Project.
+For details, please see https://owasp.org/www-project-benchmark.
+
+The OWASP Benchmark is free software: you can redistribute it and/or modify it under the terms
+of the GNU General Public License as published by the Free Software Foundation, version 3.
+
+The OWASP Benchmark is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
+PURPOSE. See the GNU General Public License for more details.
+
+  Author: Theo Cartsonis
+  Created: 2025
+'''
+
+from flask import redirect, url_for, request, make_response, render_template
+import urllib.parse
+import io
+import secrets
+import helpers.utils
+
+def init(app):
+
+	@app.route('/benchmark/securecookie-00/BenchmarkTest00064', methods=['GET'])
+	def BenchmarkTest00064_get():
+		response = make_response(render_template('web/securecookie-00/BenchmarkTest00064.html'))
+		response.set_cookie('BenchmarkTest00064', secrets.token_urlsafe(32),
+			max_age=60*3,
+			secure=True,
+			httponly=True,
+			samesite='Strict',
+			path='/benchmark/securecookie-00/')
+		return response
+
+	@app.route('/benchmark/securecookie-00/BenchmarkTest00064', methods=['POST'])
+	def BenchmarkTest00064_post():
+		param = request.cookies.get("BenchmarkTest00064", "")
+
+		bar = helpers.utils.sanitize_cookie_value(param)
+
+		value = bar if isinstance(bar, str) else ""
+
+		RESPONSE = make_response(
+			f'Created cookie: \'SomeCookie\' with secure flag set to true.'
+		)
+		RESPONSE.set_cookie('SomeCookie', value,
+			max_age=60*3,
+			path='/benchmark/securecookie-00/',
+			secure=True,
+			httponly=True,
+			samesite='Strict')
+
+		return RESPONSE

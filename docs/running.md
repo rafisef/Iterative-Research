@@ -37,7 +37,7 @@ The framework runs **Bandit** and **Semgrep** as static analysis backends.
 
 **Bandit** is installed in the main virtual environment via `pip install -r requirements.txt`.
 
-**Semgrep** is installed in a **separate virtual environment** at `~/.venvs/semgrep-env/` to avoid dependency conflicts (Semgrep pins an older version of pydantic that clashes with FastAPI). The framework automatically invokes the isolated binary — no manual path configuration is needed.
+**Semgrep** is installed in a **separate virtual environment** at `~/.venvs/semgrep-env/` to avoid dependency conflicts (Semgrep pins an older version of pydantic that clashes with other packages). The framework automatically invokes the isolated binary — no manual path configuration is needed.
 
 Scanner selection is **automatic** — no configuration needed. The framework detects the programming language from each snippet's file extension and applies the appropriate tools:
 
@@ -80,11 +80,8 @@ The framework automatically discovers the Semgrep binary at `~/.venvs/semgrep-en
 | `PyYAML`     | `>=6.0`              | YAML config loading                                  |
 | `Flask`      | `>=3.0.0`            | Web framework used by generated Python snippets      |
 | `gunicorn`   | `>=21.2.0`           | WSGI server (available to generated Python snippets)  |
-| `requests`   | `>=2.31.0`           | Health check polling in `server_runner.py`            |
+| `requests`   | `>=2.31.0`           | Health check polling in Nuclei rescan                |
 | `bandit`     | `>=1.7.0`            | Static analysis for Python snippets                  |
-| `fastapi`    | `>=0.115.0`          | Web UI backend                                       |
-| `uvicorn`    | `>=0.32.0`           | ASGI server for FastAPI                              |
-| `sqlalchemy` | `>=2.0.0`            | ORM / database layer                                 |
 
 **Isolated venv (`~/.venvs/semgrep-env`):**
 

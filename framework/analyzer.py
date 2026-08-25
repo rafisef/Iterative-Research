@@ -649,7 +649,7 @@ def write_csv(
 
 
 # ---------------------------------------------------------------------------
-# JSON output (for web API consumption)
+# JSON output (structured data for HTML export and programmatic use)
 # ---------------------------------------------------------------------------
 
 def analyze_run_json(
@@ -661,7 +661,7 @@ def analyze_run_json(
 ) -> Dict[str, Any]:
     """
     Return the same analysis data as ``analyze_run()`` but as structured
-    dicts/lists suitable for JSON serialization via the web API.
+    dicts/lists suitable for JSON serialization.
 
     The existing ``analyze_run()`` continues to print to stdout for CLI use;
     this function returns data without side effects.
@@ -775,7 +775,7 @@ def analyze_run_json(
 
 # Distinct line colors cycled across agents (prompting strategies).
 _AGENT_COLORS = ["#3b82f6", "#22c55e", "#ef4444", "#a855f7", "#f59e0b", "#06b6d4", "#ec4899", "#84cc16"]
-# Severity colors (match the CLI / web UI conventions).
+# Severity colors (match the CLI conventions).
 _SEV_COLORS = {"high": "#ef4444", "medium": "#f59e0b", "low": "#3b82f6"}
 
 
