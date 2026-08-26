@@ -121,11 +121,13 @@ def main() -> None:
     experiment_cfg = config.get("experiment", {})
     paths_cfg = config.get("paths", {})
 
-    # Resolve model.
+    # Resolve model — only set explicit override when --model flag is provided.
     llm_cfg = config.get("llm", {})
-    active_model = args.model or llm_cfg.get("model", "gpt-4o")
-    config.setdefault("llm", {})
-    config["llm"]["model"] = active_model
+    openrouter_cfg = config.get("openrouter", {})
+    explicit_model_override: str | None = args.model  # None if no --model flag
+    if args.model:
+        config.setdefault("llm", {})
+        config["llm"]["model"] = args.model
 
     # Resolve iterations.
     iterations = (
@@ -137,7 +139,6 @@ def main() -> None:
     runs_dir = paths_cfg.get("runs_dir", "runs")
     run_id = args.run_id.strip() or _make_run_id()
     run_dir = Path(runs_dir) / run_id
-    ensure_dir(run_dir)
 
     agent_ids = experiment_cfg.get("agents", [])
     vuln_ids = experiment_cfg.get("vulnerabilities", [])
@@ -206,10 +207,17 @@ def main() -> None:
         else:
             vulns = list(discovered.values())
 
+    # Determine display model for logging.
+    use_openrouter = openrouter_cfg.get("enabled") and not explicit_model_override
+    if use_openrouter:
+        display_model = f"OpenRouter/{openrouter_cfg.get('model', '?')}"
+    else:
+        display_model = explicit_model_override or llm_cfg.get("model", "gpt-4o")
+
     logger.info(
         "Starting code generation — run_id=%s  model=%s  iterations=%d  "
         "agents=%s  vulns=%s",
-        run_id, active_model, iterations,
+        run_id, display_model, iterations,
         [a.id for a in agents],
         [v.id for v in vulns],
     )
@@ -223,7 +231,7 @@ def main() -> None:
         iterations=iterations,
         max_workers=max_workers,
         seed=seed,
-        model_override=active_model,
+        model_override=explicit_model_override,
         snippet_path_arg=snippet_path_arg,
         base_code_dir_arg=base_code_dir_arg,
     )

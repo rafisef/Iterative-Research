@@ -118,7 +118,7 @@ def _execute_test_run(
   test_run_snippet: str,
   run_dir: Path,
   run_id: str,
-  active_model: str,
+  active_model: str | None,
   iterations: int,
   logs_dir: str,
 ) -> None:
@@ -292,6 +292,10 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
   config.setdefault("llm", {})
   config["llm"]["model"] = active_model
 
+  # Track whether the model was explicitly provided via CLI (--model flag).
+  # When None, downstream code can detect OpenRouter config should take priority.
+  explicit_model_override: str | None = active_model if model_arg is not None else None
+
   experiment_cfg = config.get("experiment", {})
 
   # Resolve iteration count: CLI --iterations > test-run cap > config > default of 5.
@@ -315,22 +319,13 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
 
   run_id = run_id_override.strip() or _make_run_id()
   run_dir = Path(runs_dir) / run_id
-  ensure_dir(run_dir)
 
   logs_dir = str(run_dir / "logs")
   results_index = str(run_dir / "results.jsonl")
 
-  if log_name:
-    ensure_dir(logs_dir)
-    log_path = Path(logs_dir) / f"{log_name}.log"
-    file_handler = logging.FileHandler(log_path, encoding="utf-8")
-    file_handler.setFormatter(
-      logging.Formatter(
-        fmt="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-      )
-    )
-    logger.addHandler(file_handler)
+  # Defer directory creation and log file setup until after cost confirmation.
+  # generate_code() calls ensure_dir(run_dir) after the user accepts.
+  _deferred_log_name = log_name
 
   agents = resolve_agents_from_config(agent_ids, agents_cfg=config.get("agents", {}))
 
@@ -397,6 +392,29 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
 
   # Print the startup banner.
   llm_cfg = config.get("llm", {})
+  openrouter_cfg = config.get("openrouter", {})
+  use_openrouter = openrouter_cfg.get("enabled") and not model_arg
+  if use_openrouter:
+    banner_model = openrouter_cfg.get("model", active_model)
+    provider_line = f"OpenRouter  model={banner_model}"
+    banner_temp = openrouter_cfg.get("temperature", llm_cfg.get("temperature"))
+    banner_top_p = openrouter_cfg.get("top_p", llm_cfg.get("top_p"))
+    banner_max_tokens = openrouter_cfg.get("max_tokens", llm_cfg.get("max_tokens"))
+    from .llm_client import _fetch_supported_parameters
+    supported_params = _fetch_supported_parameters(banner_model) if banner_model else []
+    if supported_params:
+      if "temperature" not in supported_params:
+        banner_temp = "unsupported"
+      if "top_p" not in supported_params:
+        banner_top_p = "unsupported"
+      if "max_tokens" not in supported_params:
+        banner_max_tokens = "unsupported"
+  else:
+    provider_line = f"LiteLLM  model={active_model}"
+    banner_temp = llm_cfg.get("temperature")
+    banner_top_p = llm_cfg.get("top_p")
+    banner_max_tokens = llm_cfg.get("max_tokens")
+
   meta_path = str(run_dir / "run_metadata.json")
   if test_run_flag:
     scanners_line = f"test run — auto-detected  snippet={test_run_snippet}"
@@ -414,17 +432,15 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
     )
   else:
     snippet_banner_line = ""
-  # Build a nicely-aligned startup banner using f-strings to avoid logging
-  # interpolation errors when messages contain percent-like sequences.
   banner = (
     f"\n{separator}\n"
     f"{('Random seed'):<{col}}{seed if seed is not None else 'none'}\n"
     f"{('Run ID'):<{col}}{run_id}\n"
     f"{('Run dir'):<{col}}{run_dir.resolve()}\n"
-    f"{('LLM Provider'):<{col}}{'model=' + active_model}\n"
+    f"{('LLM Provider'):<{col}}{provider_line}\n"
     f"{('Configuration'):<{col}}"
-    f"iterations={iterations}  temperature={llm_cfg.get('temperature')}  "
-    f"top_p={llm_cfg.get('top_p')}  max_tokens={llm_cfg.get('max_tokens')}\n"
+    f"iterations={iterations}  temperature={banner_temp}  "
+    f"top_p={banner_top_p}  max_tokens={banner_max_tokens}\n"
     f"{('Scanners'):<{col}}{scanners_line}\n"
     f"{('Workers'):<{col}}{'generate=' + str(generate_workers) + ' scan=' + str(scan_workers) + ' (per-iteration)'}\n"
     f"{('Metadata'):<{col}}{meta_path}\n"
@@ -435,6 +451,7 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
 
   # --test-run: lightweight single-call check — no output files or results.jsonl.
   if test_run_flag:
+    ensure_dir(run_dir)
     write_run_metadata(
       run_dir=run_dir,
       run_id=run_id,
@@ -454,7 +471,7 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
       test_run_snippet=test_run_snippet,
       run_dir=run_dir,
       run_id=run_id,
-      active_model=active_model,
+      active_model=explicit_model_override,
       iterations=iterations,
       logs_dir=logs_dir,
     )
@@ -470,11 +487,25 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
     iterations=iterations,
     max_workers=generate_workers,
     seed=seed,
-    model_override=active_model,
+    model_override=explicit_model_override,
     test_run_snippet=test_run_snippet,
     snippet_path_arg=snippet_path_arg,
     base_code_dir_arg=base_code_dir_arg,
   )
+
+  # Set up file logging now that the run directory exists (created by generate_code
+  # after the user accepted the cost estimate).
+  if _deferred_log_name:
+    ensure_dir(logs_dir)
+    log_path = Path(logs_dir) / f"{_deferred_log_name}.log"
+    file_handler = logging.FileHandler(log_path, encoding="utf-8")
+    file_handler.setFormatter(
+      logging.Formatter(
+        fmt="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+      )
+    )
+    logger.addHandler(file_handler)
 
   run_scans(run_dir=run_dir, config=config, max_workers=scan_workers)
 

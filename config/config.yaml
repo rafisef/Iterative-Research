@@ -1,22 +1,42 @@
-llm:
-  # LiteLLM model string — change this to switch providers without any code changes.
-  # Examples:
-  #   OpenAI:     gpt-4o, gpt-4o-mini
-  #   Ollama:     ollama/codellama, ollama/llama3.2, ollama/deepseek-coder  (free, local)
-  #   Anthropic:  anthropic/claude-3-5-sonnet-20241022  (requires ANTHROPIC_API_KEY)
-  #   Gemini:     gemini/gemini-2.5-flash  (requires GEMINI_API_KEY)
-  #   Grok:       xai/grok-4  (requires XAI_API_KEY)
-  model: gpt-4o
-  # model: xai/grok-4
-  # model: gpt-5
-  # model: 
+# llm:
+#   # LiteLLM model string — change this to switch providers without any code changes.
+#   # Examples:
+#   #   OpenAI:     gpt-4o, gpt-4o-mini
+#   #   Ollama:     ollama/codellama, ollama/llama3.2, ollama/deepseek-coder  (free, local)
+#   #   Anthropic:  anthropic/claude-3-5-sonnet-20241022  (requires ANTHROPIC_API_KEY)
+#   #   Gemini:     gemini/gemini-2.5-flash  (requires GEMINI_API_KEY)
+#   #   Grok:       xai/grok-4  (requires XAI_API_KEY)
+#   model: gpt-4o
+#   # model: xai/grok-4
+#   # model: gpt-5
+#   # model:
+#   temperature: 0.7
+#   top_p: 1
+#   max_tokens: 4096
+#   request_delay_seconds: 10.0
+
+# ── OpenRouter configuration ────────────────────────────────────────────────
+# When this section is present and enabled, it overrides the llm.model setting
+# above. OpenRouter provides access to hundreds of models through a single API.
+# Set your OPENROUTER_API_KEY env var or supply it directly below.
+# Model list: https://openrouter.ai/models
+openrouter:
+  enabled: true
+  # api_key: or-...  # Optional: set here or use OPENROUTER_API_KEY env var
+  # model: openai/gpt-5.6-luna
+  model: openai/gpt-oss-20b
+  # LLM parameters — override the llm section defaults when OpenRouter is active.
+  # Omit any key to fall back to the value in the llm section above.
   temperature: 0.7
-  top_p: 1
-  max_tokens: 4096
-  request_delay_seconds: 10.0
+  top_p: 1.0
+  # max_tokens: 4096
+  # request_delay_seconds: 10.0
+  # Optional: your app name and site URL (shown in OpenRouter dashboard)
+  # app_name: Iterative-Research
+  # site_url: https://github.com/your-repo
 
 experiment:
-  iterations: 10
+  iterations: 3
 
   # vulnerabilities:
   #   # ── Python ──────────────────────────────────────────────────────────────
@@ -47,24 +67,24 @@ experiment:
   # Maximum number of worker threads used to process agents in parallel for
   # each iteration. Set to 1 to run everything sequentially.
   # Default max_workers used unless more specific keys are provided below.
-  max_workers: 4
+  max_workers: 1
   # Optional: override workers specifically for generation and scanning stages.
   # If unset, each defaults to the value of `max_workers` above.
-  generate_workers: 4
-  scan_workers: 8
+  # generate_workers: 4
+  # scan_workers: 8
 
 # Scanner selection is automatic — no configuration needed here.
 # The framework detects the language from each snippet's file extension and
 # runs the appropriate tools (Bandit + Semgrep for Python; Semgrep for TypeScript).
 # Per-vulnerability Semgrep pack overrides are defined in framework/vulnerabilities.py.
 
-nuclei:
-  # Full path to the Nuclei binary. Used by nuclei_rescan.py after a run completes.
-  # Find with: which nuclei  (Homebrew: /opt/homebrew/bin/nuclei)
-  binary_path: /opt/homebrew/bin/nuclei
-  # Nuclei tags to target during dynamic scanning.
-  tags:
-    - xss
+# nuclei:
+#   # Full path to the Nuclei binary. Used by nuclei_rescan.py after a run completes.
+#   # Find with: which nuclei  (Homebrew: /opt/homebrew/bin/nuclei)
+#   binary_path: /opt/homebrew/bin/nuclei
+#   # Nuclei tags to target during dynamic scanning.
+#   tags:
+#     - xss
 
 paths:
   # Root directory for all experiment runs. Each run creates a timestamped
@@ -77,7 +97,7 @@ paths:
   # Base snippets directory. Language sub-folders:
   #   snippets/python/<category>/     — Python base snippets
   #   snippets/typescript/<category>/ — TypeScript base snippets
-  snippets_dir: code-snippets
+  snippets_dir: code-snippets/python-test
 
 # ── Agent definitions ────────────────────────────────────────────────────────
 # Each key matches an agent ID listed under experiment.agents.

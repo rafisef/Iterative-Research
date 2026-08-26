@@ -30,9 +30,246 @@ from typing import Dict, List
 
 from .agents import Agent
 from .io_utils import AI_CODE_DIR, ensure_dir, logger, read_text, write_text
-from .llm_client import get_llm_client
+from .llm_client import get_llm_client, _fetch_supported_parameters
 from .static_scanner import detect_language
 from dataclasses import dataclass
+
+# ---------------------------------------------------------------------------
+# Cost estimation
+# ---------------------------------------------------------------------------
+
+# Token estimation constants.
+# Average lines per snippet file (measured from code-snippets directory).
+_AVG_LINES_PER_FILE = 63.5
+# Average tokens per line of code (conservative estimate across Python/TS/JS).
+_TOKENS_PER_LINE = 10.0
+# Fixed prompt overhead tokens (instruction text, formatting, fences).
+_PROMPT_OVERHEAD_TOKENS = 77
+
+# Pricing per 1M tokens: (input_cost, output_cost)
+MODEL_PRICING: Dict[str, tuple[float, float]] = {
+    "gpt-4o": (2.50, 10.00),
+    "gpt-4o-mini": (0.15, 0.60),
+    "gpt-4.1": (2.00, 8.00),
+    "gpt-4.1-mini": (0.40, 1.60),
+    "gpt-4.1-nano": (0.10, 0.40),
+    "gpt-5": (10.00, 30.00),
+    "o3": (10.00, 40.00),
+    "o3-mini": (1.10, 4.40),
+    "o4-mini": (1.10, 4.40),
+    "anthropic/claude-sonnet-4": (3.00, 15.00),
+    "anthropic/claude-3-5-sonnet-20241022": (3.00, 15.00),
+    "anthropic/claude-3-5-haiku-20241022": (0.80, 4.00),
+    "anthropic/claude-opus-4": (15.00, 75.00),
+    "gemini/gemini-2.0-flash": (0.10, 0.40),
+    "gemini/gemini-2.5-flash": (0.15, 0.60),
+    "gemini/gemini-2.5-pro": (1.25, 10.00),
+    "groq/llama-3.3-70b-versatile": (0.59, 0.79),
+    "together_ai/meta-llama/Llama-3-70b-chat-hf": (0.90, 0.90),
+    "xai/grok-4": (3.00, 15.00),
+    "xai/grok-3": (3.00, 15.00),
+    # OpenRouter models (priced same as underlying model)
+    "openrouter/anthropic/claude-sonnet-4": (3.00, 15.00),
+    "openrouter/anthropic/claude-3.5-sonnet": (3.00, 15.00),
+    "openrouter/anthropic/claude-opus-4": (15.00, 75.00),
+    "openrouter/openai/gpt-4o": (2.50, 10.00),
+    "openrouter/openai/gpt-4o-mini": (0.15, 0.60),
+    "openrouter/google/gemini-2.5-flash": (0.15, 0.60),
+    "openrouter/google/gemini-2.5-pro": (1.25, 10.00),
+    "openrouter/meta-llama/llama-3.3-70b-instruct": (0.59, 0.79),
+    "openrouter/deepseek/deepseek-chat-v3": (0.27, 1.10),
+    "openrouter/qwen/qwen-2.5-coder-32b-instruct": (0.20, 0.20),
+}
+
+
+_openrouter_pricing_cache: Dict[str, tuple[float, float]] | None = None
+
+
+def _fetch_openrouter_pricing() -> Dict[str, tuple[float, float]]:
+    """
+    Fetch live pricing from the OpenRouter /api/v1/models endpoint.
+    Returns a dict of model_id -> (input_cost_per_1M, output_cost_per_1M).
+    Results are cached for the lifetime of the process.
+    """
+    global _openrouter_pricing_cache
+    if _openrouter_pricing_cache is not None:
+        return _openrouter_pricing_cache
+
+    import requests
+    try:
+        resp = requests.get("https://openrouter.ai/api/v1/models", timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        logger.warning("Failed to fetch OpenRouter pricing: %s", exc)
+        _openrouter_pricing_cache = {}
+        return _openrouter_pricing_cache
+
+    pricing_map: Dict[str, tuple[float, float]] = {}
+    for model in data.get("data", []):
+        model_id = model.get("id", "")
+        p = model.get("pricing", {})
+        prompt_cost = p.get("prompt")
+        completion_cost = p.get("completion")
+        if prompt_cost is not None and completion_cost is not None:
+            # API returns cost per token as a string; convert to per-1M tokens.
+            pricing_map[model_id] = (
+                float(prompt_cost) * 1_000_000,
+                float(completion_cost) * 1_000_000,
+            )
+
+    _openrouter_pricing_cache = pricing_map
+    logger.info("Fetched pricing for %d models from OpenRouter.", len(pricing_map))
+    return _openrouter_pricing_cache
+
+
+def _lookup_pricing(model: str, use_openrouter: bool = False) -> tuple[float, float]:
+    """
+    Look up pricing for a model.
+    When use_openrouter is True, fetches live pricing from the OpenRouter API first.
+    Falls back to the static MODEL_PRICING table, then to a conservative default.
+    """
+    if use_openrouter:
+        or_pricing = _fetch_openrouter_pricing()
+        if model in or_pricing:
+            return or_pricing[model]
+        # Try without openrouter/ prefix in static table
+        prefixed = f"openrouter/{model}"
+        if prefixed in MODEL_PRICING:
+            return MODEL_PRICING[prefixed]
+
+    if model in MODEL_PRICING:
+        return MODEL_PRICING[model]
+    for key, pricing in MODEL_PRICING.items():
+        if model.startswith(key) or key.startswith(model):
+            return pricing
+    return (3.00, 15.00)
+
+
+def _compute_avg_lines(snippets_dir: Path | None) -> float:
+    """
+    Compute the average line count across all supported files in snippets_dir.
+    Falls back to _AVG_LINES_PER_FILE if the directory is missing or empty.
+    """
+    if snippets_dir is None or not snippets_dir.is_dir():
+        return _AVG_LINES_PER_FILE
+
+    total_lines = 0
+    file_count = 0
+    for f in sorted(snippets_dir.rglob("*")):
+        if f.is_file() and f.suffix in _SNIPPET_EXTENSIONS:
+            try:
+                total_lines += sum(1 for _ in f.open(encoding="utf-8", errors="ignore"))
+                file_count += 1
+            except OSError:
+                continue
+
+    if file_count == 0:
+        return _AVG_LINES_PER_FILE
+    return total_lines / file_count
+
+
+def estimate_cost(
+    model: str,
+    num_files: int,
+    num_agents: int,
+    iterations: int,
+    snippets_dir: Path | None = None,
+    use_openrouter: bool = False,
+) -> Dict[str, float]:
+    """
+    Estimate the total cost of a generation run.
+
+    Uses the actual average line count from snippets_dir when provided,
+    otherwise falls back to _AVG_LINES_PER_FILE.
+
+    When use_openrouter is True, fetches live pricing from the OpenRouter API
+    for accurate per-model costs.
+
+    Assumptions:
+    - Each snippet ≈ avg_lines × _TOKENS_PER_LINE tokens
+    - Fixed overhead per call: _PROMPT_OVERHEAD_TOKENS (instruction + fences)
+    - Output tokens ≈ same as input snippet tokens (LLM returns code of similar length)
+    - Each call: input = snippet_tokens + overhead, output = snippet_tokens
+
+    Returns dict with token counts, costs, and the avg_lines used.
+    """
+    avg_lines = _compute_avg_lines(snippets_dir)
+    snippet_tokens = int(avg_lines * _TOKENS_PER_LINE)
+    input_tokens_per_call = snippet_tokens + _PROMPT_OVERHEAD_TOKENS
+    output_tokens_per_call = snippet_tokens
+
+    total_calls = num_files * num_agents * iterations
+    total_input_tokens = total_calls * input_tokens_per_call
+    total_output_tokens = total_calls * output_tokens_per_call
+
+    input_price_per_million, output_price_per_million = _lookup_pricing(model, use_openrouter=use_openrouter)
+    input_cost = (total_input_tokens / 1_000_000) * input_price_per_million
+    output_cost = (total_output_tokens / 1_000_000) * output_price_per_million
+    total_cost = input_cost + output_cost
+
+    return {
+        "total_calls": total_calls,
+        "avg_lines_per_file": avg_lines,
+        "tokens_per_file": snippet_tokens,
+        "total_input_tokens": total_input_tokens,
+        "total_output_tokens": total_output_tokens,
+        "input_cost": input_cost,
+        "output_cost": output_cost,
+        "total_cost": total_cost,
+        "input_price_per_million": input_price_per_million,
+        "output_price_per_million": output_price_per_million,
+    }
+
+
+def prompt_cost_confirmation(
+    model: str,
+    num_files: int,
+    num_agents: int,
+    iterations: int,
+    provider: str | None = None,
+    snippets_dir: Path | None = None,
+) -> None:
+    """
+    Print estimated costs and prompt the user for confirmation.
+    Raises SystemExit if the user declines (Ctrl-C).
+    """
+    is_openrouter = provider == "OpenRouter"
+    est = estimate_cost(
+        model, num_files, num_agents, iterations,
+        snippets_dir=snippets_dir, use_openrouter=is_openrouter,
+    )
+
+    provider_label = provider or "LiteLLM"
+    separator = "=" * 60
+    print(f"\n{separator}")
+    print("  COST ESTIMATE")
+    print(separator)
+    print(f"  Provider:          {provider_label}")
+    print(f"  Model:             {model}")
+    print(f"  Pricing:           ${est['input_price_per_million']:.2f} / ${est['output_price_per_million']:.2f} per 1M tokens (in/out)")
+    print(f"  Files:             {num_files}")
+    print(f"  Avg lines/file:    {est['avg_lines_per_file']:.1f}")
+    print(f"  Tokens/file:       {est['tokens_per_file']:,}")
+    print(f"  Agents:            {num_agents}")
+    print(f"  Iterations:        {iterations}")
+    print(f"  Total LLM calls:   {est['total_calls']:,}")
+    print(f"  Est. input tokens: {est['total_input_tokens']:,}")
+    print(f"  Est. output tokens:{est['total_output_tokens']:,}")
+    print(separator)
+    print(f"  Estimated cost:    ${est['total_cost']:.4f}")
+    print(f"    Input:           ${est['input_cost']:.4f}")
+    print(f"    Output:          ${est['output_cost']:.4f}")
+    print(separator)
+
+    try:
+        response = input("\n  Proceed with generation? [Y/n] (Ctrl-C to cancel): ").strip().lower()
+        if response in ("n", "no"):
+            print("  Generation cancelled.")
+            raise SystemExit(0)
+    except KeyboardInterrupt:
+        print("\n  Generation cancelled.")
+        raise SystemExit(0)
 
 
 @dataclass
@@ -111,14 +348,62 @@ def generate_code(
         random.seed(int(seed))
 
     llm_cfg = config.get("llm", {})
-    temperature = llm_cfg.get("temperature")
-    top_p = llm_cfg.get("top_p")
-    max_tokens = llm_cfg.get("max_tokens")
-    active_model = model_override or llm_cfg.get("model", "gpt-4o")
+    openrouter_cfg = config.get("openrouter", {})
+
+    # Resolve the active model — OpenRouter overrides when enabled and no CLI override.
+    use_openrouter = openrouter_cfg.get("enabled") and not model_override
+    if use_openrouter:
+        active_model = openrouter_cfg.get("model", "")
+        temperature = openrouter_cfg.get("temperature") or llm_cfg.get("temperature")
+        top_p = openrouter_cfg.get("top_p") or llm_cfg.get("top_p")
+        max_tokens = openrouter_cfg.get("max_tokens") or llm_cfg.get("max_tokens")
+        # Check which parameters the model actually supports.
+        supported_params = _fetch_supported_parameters(active_model) if active_model else []
+        if supported_params:
+            if "temperature" not in supported_params:
+                temperature = "unsupported"
+            if "top_p" not in supported_params:
+                top_p = "unsupported"
+            if "max_tokens" not in supported_params:
+                max_tokens = "unsupported"
+    else:
+        active_model = model_override or llm_cfg.get("model")
+        temperature = llm_cfg.get("temperature")
+        top_p = llm_cfg.get("top_p")
+        max_tokens = llm_cfg.get("max_tokens")
+
+    if not active_model:
+        logger.error(
+            "No model selected. Please select a provider and/or model to continue.\n"
+            "Set llm.model in config, enable the openrouter section, or pass --model on the CLI."
+        )
+        raise SystemExit(1)
+
     outputs_dir = run_dir / AI_CODE_DIR
     generation_log_path = run_dir / "generation_log.jsonl"
 
+    # Resolve snippets directory for cost estimation line-count calculation.
+    paths_cfg = config.get("paths", {})
+    if base_code_dir_arg:
+        cost_snippets_dir = Path(base_code_dir_arg)
+    elif snippet_path_arg:
+        cost_snippets_dir = Path(snippet_path_arg).parent
+    else:
+        cost_snippets_dir = Path(paths_cfg.get("snippets_dir", "snippets"))
+
+    prompt_cost_confirmation(
+        model=active_model,
+        num_files=len(vulns),
+        num_agents=len(agents),
+        iterations=iterations,
+        provider="OpenRouter" if use_openrouter else None,
+        snippets_dir=cost_snippets_dir,
+    )
+
+    # Create directories only after the user confirms — avoids leftover folders on cancel.
+    ensure_dir(run_dir)
     ensure_dir(outputs_dir)
+
     write_run_metadata(
         run_dir=run_dir,
         run_id=run_dir.name,
@@ -131,7 +416,7 @@ def generate_code(
         base_code_dir_arg=base_code_dir_arg,
     )
 
-    llm_client = get_llm_client(config_path=config_path, model_override=active_model)
+    llm_client = get_llm_client(config_path=config_path, model_override=model_override)
 
     def _generate_single(
         vuln_id: str,
@@ -275,14 +560,36 @@ def write_run_metadata(
     config values so the metadata accurately reflects what ran.
     """
     llm_cfg = config.get("llm", {})
+    openrouter_cfg = config.get("openrouter", {})
     experiment_cfg = config.get("experiment", {})
+
+    use_openrouter = openrouter_cfg.get("enabled", False)
+    if use_openrouter:
+        resolved_model = openrouter_cfg.get("model") or llm_cfg.get("model")
+        resolved_temperature = openrouter_cfg.get("temperature") or llm_cfg.get("temperature")
+        resolved_top_p = openrouter_cfg.get("top_p") or llm_cfg.get("top_p")
+        resolved_max_tokens = openrouter_cfg.get("max_tokens") or llm_cfg.get("max_tokens")
+        supported_params = _fetch_supported_parameters(resolved_model) if resolved_model else []
+        if supported_params:
+            if "temperature" not in supported_params:
+                resolved_temperature = "unsupported"
+            if "top_p" not in supported_params:
+                resolved_top_p = "unsupported"
+            if "max_tokens" not in supported_params:
+                resolved_max_tokens = "unsupported"
+    else:
+        resolved_model = llm_cfg.get("model")
+        resolved_temperature = llm_cfg.get("temperature")
+        resolved_top_p = llm_cfg.get("top_p")
+        resolved_max_tokens = llm_cfg.get("max_tokens")
 
     metadata = {
         "run_id": run_id,
         "started_at": datetime.now().isoformat(),
-        "model": llm_cfg.get("model"),
-        "temperature": llm_cfg.get("temperature"),
-        "max_tokens": llm_cfg.get("max_tokens"),
+        "model": resolved_model,
+        "temperature": resolved_temperature,
+        "top_p": resolved_top_p,
+        "max_tokens": resolved_max_tokens,
         "iterations": effective_iterations,
         "agents": effective_agents,
         "vulnerabilities": effective_vulns,
