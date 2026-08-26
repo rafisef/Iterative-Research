@@ -229,6 +229,7 @@ def prompt_cost_confirmation(
     iterations: int,
     provider: str | None = None,
     snippets_dir: Path | None = None,
+    openrouter_cfg: Dict | None = None,
 ) -> None:
     """
     Print estimated costs and prompt the user for confirmation.
@@ -240,6 +241,21 @@ def prompt_cost_confirmation(
         snippets_dir=snippets_dir, use_openrouter=is_openrouter,
     )
 
+    # Determine reasoning status from config + model capabilities.
+    if is_openrouter and openrouter_cfg:
+        supported_params = _fetch_supported_parameters(model)
+        model_supports_reasoning = "reasoning" in supported_params if supported_params else False
+        reasoning_enabled = openrouter_cfg.get("reasoning_enabled", False)
+        reasoning_effort = openrouter_cfg.get("reasoning_effort", "medium")
+        if reasoning_enabled and model_supports_reasoning:
+            reasoning_label = f"yes (effort={reasoning_effort})"
+        elif reasoning_enabled and not model_supports_reasoning:
+            reasoning_label = "UNSUPPORTED (model does not support reasoning)"
+        else:
+            reasoning_label = "no"
+    else:
+        reasoning_label = "no"
+
     provider_label = provider or "LiteLLM"
     separator = "=" * 60
     print(f"\n{separator}")
@@ -247,6 +263,7 @@ def prompt_cost_confirmation(
     print(separator)
     print(f"  Provider:          {provider_label}")
     print(f"  Model:             {model}")
+    print(f"  Reasoning:         {reasoning_label}")
     print(f"  Pricing:           ${est['input_price_per_million']:.2f} / ${est['output_price_per_million']:.2f} per 1M tokens (in/out)")
     print(f"  Files:             {num_files}")
     print(f"  Avg lines/file:    {est['avg_lines_per_file']:.1f}")
@@ -354,23 +371,8 @@ def generate_code(
     use_openrouter = openrouter_cfg.get("enabled") and not model_override
     if use_openrouter:
         active_model = openrouter_cfg.get("model", "")
-        temperature = openrouter_cfg.get("temperature") or llm_cfg.get("temperature")
-        top_p = openrouter_cfg.get("top_p") or llm_cfg.get("top_p")
-        max_tokens = openrouter_cfg.get("max_tokens") or llm_cfg.get("max_tokens")
-        # Check which parameters the model actually supports.
-        supported_params = _fetch_supported_parameters(active_model) if active_model else []
-        if supported_params:
-            if "temperature" not in supported_params:
-                temperature = "unsupported"
-            if "top_p" not in supported_params:
-                top_p = "unsupported"
-            if "max_tokens" not in supported_params:
-                max_tokens = "unsupported"
     else:
         active_model = model_override or llm_cfg.get("model")
-        temperature = llm_cfg.get("temperature")
-        top_p = llm_cfg.get("top_p")
-        max_tokens = llm_cfg.get("max_tokens")
 
     if not active_model:
         logger.error(
@@ -398,11 +400,15 @@ def generate_code(
         iterations=iterations,
         provider="OpenRouter" if use_openrouter else None,
         snippets_dir=cost_snippets_dir,
+        openrouter_cfg=openrouter_cfg if use_openrouter else None,
     )
 
     # Create directories only after the user confirms — avoids leftover folders on cancel.
     ensure_dir(run_dir)
     ensure_dir(outputs_dir)
+
+    llm_client = get_llm_client(config_path=config_path, model_override=model_override)
+    effective_params = llm_client.get_effective_params()
 
     write_run_metadata(
         run_dir=run_dir,
@@ -411,12 +417,11 @@ def generate_code(
         effective_iterations=iterations,
         effective_agents=[a.id for a in agents],
         effective_vulns=[v.id for v in vulns],
+        effective_params=effective_params,
         test_run_snippet=test_run_snippet,
         snippet_path_arg=snippet_path_arg,
         base_code_dir_arg=base_code_dir_arg,
     )
-
-    llm_client = get_llm_client(config_path=config_path, model_override=model_override)
 
     def _generate_single(
         vuln_id: str,
@@ -481,15 +486,15 @@ def generate_code(
 
         log_entry = json.dumps({
             "agent": agent.id,
-            # Use explicit filename instead of vulnerability id in logs
             "file": Path(vuln_base_snippet_path).name,
-            # Human-facing iteration numbering (1-based)
             "iteration": iteration + 1,
             "prompt": instruction,
-            "model": active_model,
-            "temperature": temperature,
-            "top_p": top_p,
-            "max_tokens": max_tokens
+            "model": effective_params.get("model", active_model),
+            "temperature": effective_params.get("temperature"),
+            "top_p": effective_params.get("top_p"),
+            "max_tokens": effective_params.get("max_tokens"),
+            "reasoning_enabled": effective_params.get("reasoning_enabled"),
+            "reasoning_effort": effective_params.get("reasoning_effort"),
         })
         with _GENERATION_LOG_LOCK:
             with open(generation_log_path, "a", encoding="utf-8") as f:
@@ -549,6 +554,7 @@ def write_run_metadata(
     effective_iterations: int,
     effective_agents: List[str],
     effective_vulns: List[str],
+    effective_params: Dict | None = None,
     test_run_snippet: str | None = None,
     snippet_path_arg: str | None = None,
     base_code_dir_arg: str | None = None,
@@ -556,40 +562,21 @@ def write_run_metadata(
     """
     Persist a JSON snapshot of the run configuration alongside results.
 
-    Uses the resolved runtime values (after CLI overrides) rather than raw
-    config values so the metadata accurately reflects what ran.
+    Uses the actual parameters from the LLM client (what gets sent to the API)
+    rather than raw config values.
     """
-    llm_cfg = config.get("llm", {})
-    openrouter_cfg = config.get("openrouter", {})
     experiment_cfg = config.get("experiment", {})
-
-    use_openrouter = openrouter_cfg.get("enabled", False)
-    if use_openrouter:
-        resolved_model = openrouter_cfg.get("model") or llm_cfg.get("model")
-        resolved_temperature = openrouter_cfg.get("temperature") or llm_cfg.get("temperature")
-        resolved_top_p = openrouter_cfg.get("top_p") or llm_cfg.get("top_p")
-        resolved_max_tokens = openrouter_cfg.get("max_tokens") or llm_cfg.get("max_tokens")
-        supported_params = _fetch_supported_parameters(resolved_model) if resolved_model else []
-        if supported_params:
-            if "temperature" not in supported_params:
-                resolved_temperature = "unsupported"
-            if "top_p" not in supported_params:
-                resolved_top_p = "unsupported"
-            if "max_tokens" not in supported_params:
-                resolved_max_tokens = "unsupported"
-    else:
-        resolved_model = llm_cfg.get("model")
-        resolved_temperature = llm_cfg.get("temperature")
-        resolved_top_p = llm_cfg.get("top_p")
-        resolved_max_tokens = llm_cfg.get("max_tokens")
+    params = effective_params or {}
 
     metadata = {
         "run_id": run_id,
         "started_at": datetime.now().isoformat(),
-        "model": resolved_model,
-        "temperature": resolved_temperature,
-        "top_p": resolved_top_p,
-        "max_tokens": resolved_max_tokens,
+        "model": params.get("model"),
+        "temperature": params.get("temperature"),
+        "top_p": params.get("top_p"),
+        "max_tokens": params.get("max_tokens"),
+        "reasoning_enabled": params.get("reasoning_enabled"),
+        "reasoning_effort": params.get("reasoning_effort"),
         "iterations": effective_iterations,
         "agents": effective_agents,
         "vulnerabilities": effective_vulns,

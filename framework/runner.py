@@ -402,6 +402,7 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
     banner_max_tokens = openrouter_cfg.get("max_tokens", llm_cfg.get("max_tokens"))
     from .llm_client import _fetch_supported_parameters
     supported_params = _fetch_supported_parameters(banner_model) if banner_model else []
+    banner_reasoning = "reasoning" in supported_params if supported_params else False
     if supported_params:
       if "temperature" not in supported_params:
         banner_temp = "unsupported"
@@ -414,6 +415,7 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
     banner_temp = llm_cfg.get("temperature")
     banner_top_p = llm_cfg.get("top_p")
     banner_max_tokens = llm_cfg.get("max_tokens")
+    banner_reasoning = False
 
   meta_path = str(run_dir / "run_metadata.json")
   if test_run_flag:
@@ -452,6 +454,7 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
   # --test-run: lightweight single-call check — no output files or results.jsonl.
   if test_run_flag:
     ensure_dir(run_dir)
+    test_llm_client = get_llm_client(config_path=config_path, model_override=explicit_model_override)
     write_run_metadata(
       run_dir=run_dir,
       run_id=run_id,
@@ -459,6 +462,7 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
       effective_iterations=iterations,
       effective_agents=[a.id for a in agents],
       effective_vulns=[v.id for v in vulns],
+      effective_params=test_llm_client.get_effective_params(),
       test_run_snippet=test_run_snippet,
       snippet_path_arg=snippet_path_arg,
       base_code_dir_arg=base_code_dir_arg,

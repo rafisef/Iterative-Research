@@ -38,12 +38,16 @@ class LLMClient(Protocol):
     def generate_from_snippet(self, snippet: str, agent_instruction: str, language: str = "python") -> str:  # pragma: no cover - interface
         ...
 
+    def get_effective_params(self) -> Dict[str, Any]:  # pragma: no cover - interface
+        """Return the actual parameters that will be sent to the API."""
+        ...
+
 
 @dataclass
 class LLMConfig:
     model: str
     temperature: float
-    max_tokens: int
+    max_tokens: Optional[int] = None
     top_p: Optional[float] = None
     request_delay_seconds: float = 0.0
 
@@ -84,24 +88,39 @@ class LiteLLMClientImpl:
         else:
             resolved_model = llm_cfg.get("model", "gpt-4o")
 
-        # When OpenRouter is active, its parameters override the llm section.
-        # Missing keys fall back to the llm section value.
-        active_cfg = openrouter_cfg if use_openrouter else {}
-
-        def _resolve(key: str, default):
-            val = active_cfg.get(key) if use_openrouter else None
+        # Resolve parameters: check openrouter section first (if active), then llm section.
+        # Even with a model override, openrouter values serve as fallback when llm is empty.
+        def _resolve(key: str):
+            if use_openrouter:
+                val = openrouter_cfg.get(key)
+                if val is not None:
+                    return val
+            val = llm_cfg.get(key)
             if val is not None:
                 return val
-            return llm_cfg.get(key, default)
+            if not use_openrouter:
+                val = openrouter_cfg.get(key)
+                if val is not None:
+                    return val
+            return None
 
-        resolved_top_p = _resolve("top_p", None)
+        resolved_temperature = _resolve("temperature")
+        resolved_max_tokens = _resolve("max_tokens")
+        resolved_top_p = _resolve("top_p")
+        resolved_delay = _resolve("request_delay_seconds")
+
+        if resolved_temperature is None:
+            raise SystemExit(
+                "Missing required config: temperature. "
+                "Set it in the openrouter or llm section of config.yaml."
+            )
 
         self._config = LLMConfig(
             model=resolved_model,
-            temperature=float(_resolve("temperature", 0.7)),
-            max_tokens=int(_resolve("max_tokens", 2000)),
+            temperature=float(resolved_temperature),
+            max_tokens=int(resolved_max_tokens) if resolved_max_tokens is not None else None,
             top_p=float(resolved_top_p) if resolved_top_p is not None else None,
-            request_delay_seconds=float(_resolve("request_delay_seconds", 0.0)),
+            request_delay_seconds=float(resolved_delay) if resolved_delay is not None else 0.0,
         )
 
         self._extra_headers: Dict[str, str] = {}
@@ -199,8 +218,9 @@ class LiteLLMClientImpl:
             "model": self._config.model,
             "messages": messages,
             "temperature": self._config.temperature,
-            "max_tokens": self._config.max_tokens,
         }
+        if self._config.max_tokens is not None:
+            kwargs["max_tokens"] = self._config.max_tokens
         if self._config.top_p is not None:
             kwargs["top_p"] = self._config.top_p
         if self._extra_headers:
@@ -219,6 +239,18 @@ class LiteLLMClientImpl:
             content = "\n".join(lines).strip()
 
         return content
+
+    def get_effective_params(self) -> Dict[str, Any]:
+        """Return the actual parameters sent to the LiteLLM API."""
+        params: Dict[str, Any] = {
+            "model": self._config.model,
+            "temperature": self._config.temperature,
+        }
+        if self._config.max_tokens is not None:
+            params["max_tokens"] = self._config.max_tokens
+        if self._config.top_p is not None:
+            params["top_p"] = self._config.top_p
+        return params
 
 
 _openrouter_supported_params_cache: Dict[str, List[str]] = {}
@@ -264,23 +296,67 @@ class OpenRouterClientImpl:
 
         self._model = openrouter_cfg.get("model", "")
 
-        def _resolve(key: str, default):
+        def _resolve(key: str):
             val = openrouter_cfg.get(key)
             if val is not None:
                 return val
-            return llm_cfg.get(key, default)
+            val = llm_cfg.get(key)
+            if val is not None:
+                return val
+            return None
 
-        resolved_top_p = _resolve("top_p", None)
+        resolved_temperature = _resolve("temperature")
+        resolved_max_tokens = _resolve("max_tokens")
+        resolved_top_p = _resolve("top_p")
+        resolved_delay = _resolve("request_delay_seconds")
+
+        if resolved_temperature is None:
+            raise SystemExit(
+                "Missing required config: temperature. "
+                "Set it in the openrouter or llm section of config.yaml."
+            )
 
         self._config = LLMConfig(
             model=self._model,
-            temperature=float(_resolve("temperature", 0.7)),
-            max_tokens=int(_resolve("max_tokens", 2000)),
+            temperature=float(resolved_temperature),
+            max_tokens=int(resolved_max_tokens) if resolved_max_tokens is not None else None,
             top_p=float(resolved_top_p) if resolved_top_p is not None else None,
-            request_delay_seconds=float(_resolve("request_delay_seconds", 0.0)),
+            request_delay_seconds=float(resolved_delay) if resolved_delay is not None else 0.0,
         )
 
+        # Step 1: Fetch model metadata once (cached for process lifetime).
         self._supported_params = _fetch_supported_parameters(self._model)
+
+        # Step 2: Check if the model supports reasoning.
+        model_supports_reasoning = "reasoning" in self._supported_params if self._supported_params else False
+
+        # Read reasoning config from yaml.
+        reasoning_enabled = openrouter_cfg.get("reasoning_enabled", False)
+        self._reasoning_effort = openrouter_cfg.get("reasoning_effort", "medium")
+        if self._reasoning_effort not in ("low", "medium", "high"):
+            raise SystemExit(
+                f"Invalid reasoning_effort: '{self._reasoning_effort}'. "
+                f"Must be one of: low, medium, high."
+            )
+
+        # Validate: if user wants reasoning but model doesn't support it, error out.
+        if reasoning_enabled and not model_supports_reasoning:
+            raise SystemExit(
+                f"reasoning_enabled is true but model '{self._model}' does not support reasoning. "
+                f"Either set reasoning_enabled: false or choose a model that supports reasoning."
+            )
+
+        # Final decision: use reasoning only if enabled AND model supports it.
+        self._use_reasoning = reasoning_enabled and model_supports_reasoning
+
+        # Step 4: If model not found in catalog, fail safe — treat as non-reasoning.
+        if not self._supported_params:
+            logger.warning(
+                "Model %s not found in OpenRouter catalog (stale cache or unlisted model). "
+                "Treating as non-reasoning; sending all standard parameters.",
+                self._model,
+            )
+
         if self._supported_params:
             unsupported = []
             if "temperature" not in self._supported_params:
@@ -293,6 +369,11 @@ class OpenRouterClientImpl:
                 logger.info(
                     "Model %s does not support: %s — these will be omitted from requests.",
                     self._model, ", ".join(unsupported),
+                )
+            if self._use_reasoning:
+                logger.info(
+                    "Model %s — reasoning enabled (effort=%s).",
+                    self._model, self._reasoning_effort,
                 )
 
         api_key = openrouter_cfg.get("api_key") or os.getenv("OPENROUTER_API_KEY") or ""
@@ -314,7 +395,7 @@ class OpenRouterClientImpl:
             default_headers=extra_headers or None,
         )
 
-        logger.info("OpenRouter client initialised with model=%s", self._model)
+        logger.info("OpenRouter client initialised with model=%s (reasoning=%s)", self._model, self._use_reasoning)
 
     def _build_messages(self, snippet: str, agent_instruction: str, language: str = "python") -> List[Dict[str, str]]:
         lang = language.lower()
@@ -350,18 +431,28 @@ class OpenRouterClientImpl:
         }
 
         supported = self._supported_params
-        if not supported or "temperature" in supported:
-            kwargs["temperature"] = self._config.temperature
-        if not supported or "max_tokens" in supported:
-            kwargs["max_tokens"] = self._config.max_tokens
-        if self._config.top_p is not None and (not supported or "top_p" in supported):
-            kwargs["top_p"] = self._config.top_p
 
-        extra_body: Dict[str, Any] = {}
-        if supported and "include_reasoning" in supported:
-            extra_body["include_reasoning"] = True
-        if extra_body:
-            kwargs["extra_body"] = extra_body
+        # Only include parameters the model explicitly supports.
+        # If supported is empty (model not in catalog), send all as a safe fallback.
+        if supported:
+            if "temperature" in supported:
+                kwargs["temperature"] = self._config.temperature
+            if self._config.max_tokens is not None and "max_tokens" in supported:
+                kwargs["max_tokens"] = self._config.max_tokens
+            if self._config.top_p is not None and "top_p" in supported:
+                kwargs["top_p"] = self._config.top_p
+        else:
+            kwargs["temperature"] = self._config.temperature
+            if self._config.max_tokens is not None:
+                kwargs["max_tokens"] = self._config.max_tokens
+            if self._config.top_p is not None:
+                kwargs["top_p"] = self._config.top_p
+
+        # Attach reasoning object if reasoning is enabled.
+        if self._use_reasoning:
+            kwargs["extra_body"] = {
+                "reasoning": {"effort": self._reasoning_effort},
+            }
 
         resp = self._client.chat.completions.create(**kwargs)
         msg = resp.choices[0].message
@@ -378,7 +469,7 @@ class OpenRouterClientImpl:
                 "Empty content from model=%s. Raw message: %s", self._model, raw_msg,
             )
 
-        # Reasoning models may return output in a reasoning field with empty content.
+        # Reasoning models may place output in a reasoning_content field.
         if not content:
             reasoning = getattr(msg, "reasoning_content", None) or getattr(msg, "reasoning", None)
             if reasoning:
@@ -394,6 +485,34 @@ class OpenRouterClientImpl:
             content = "\n".join(lines).strip()
 
         return content
+
+    def get_effective_params(self) -> Dict[str, Any]:
+        """Return the actual parameters sent to the OpenRouter API."""
+        supported = self._supported_params
+        params: Dict[str, Any] = {
+            "model": self._model,
+        }
+        if supported:
+            if "temperature" in supported:
+                params["temperature"] = self._config.temperature
+            if self._config.max_tokens is not None and "max_tokens" in supported:
+                params["max_tokens"] = self._config.max_tokens
+            if self._config.top_p is not None and "top_p" in supported:
+                params["top_p"] = self._config.top_p
+        else:
+            params["temperature"] = self._config.temperature
+            if self._config.max_tokens is not None:
+                params["max_tokens"] = self._config.max_tokens
+            if self._config.top_p is not None:
+                params["top_p"] = self._config.top_p
+
+        if self._use_reasoning:
+            params["reasoning_enabled"] = True
+            params["reasoning_effort"] = self._reasoning_effort
+        else:
+            params["reasoning_enabled"] = False
+
+        return params
 
 
 def get_llm_client(config_path: str = "config/config.yaml", model_override: Optional[str] = None) -> LLMClient:

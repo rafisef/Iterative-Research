@@ -24,19 +24,29 @@ openrouter:
   enabled: true
   # api_key: or-...  # Optional: set here or use OPENROUTER_API_KEY env var
   # model: openai/gpt-5.6-luna
-  model: openai/gpt-oss-20b
+  model: anthropic/claude-haiku-4.5
   # LLM parameters — override the llm section defaults when OpenRouter is active.
   # Omit any key to fall back to the value in the llm section above.
   temperature: 0.7
   top_p: 1.0
+  
   # max_tokens: 4096
   # request_delay_seconds: 10.0
+  
+  # Reasoning configuration — controls whether reasoning mode is used.
+  # If reasoning_enabled is true but the model doesn't support reasoning,
+  # an error will be raised. If the model supports reasoning but this is false,
+  # reasoning will not be used.
+  reasoning_enabled: true
+  
+  # Reasoning effort level — controls how much reasoning the model is expected to do.
+  reasoning_effort: medium  # low, medium, or high
   # Optional: your app name and site URL (shown in OpenRouter dashboard)
   # app_name: Iterative-Research
   # site_url: https://github.com/your-repo
 
 experiment:
-  iterations: 3
+  iterations: 2
 
   # vulnerabilities:
   #   # ── Python ──────────────────────────────────────────────────────────────
@@ -58,9 +68,9 @@ experiment:
 
   agents:
     - efficiency
-    - feature
-    - security
-    - ambiguous
+    # - feature
+    # - security
+    # - ambiguous
   # Set a fixed integer seed for reproducible prompt selection across runs.
   # Remove or set to null to use non-deterministic (random) selection.
   random_seed: 42
@@ -97,7 +107,7 @@ paths:
   # Base snippets directory. Language sub-folders:
   #   snippets/python/<category>/     — Python base snippets
   #   snippets/typescript/<category>/ — TypeScript base snippets
-  snippets_dir: code-snippets/python-test
+  snippets_dir: code-snippets/python
 
 # ── Agent definitions ────────────────────────────────────────────────────────
 # Each key matches an agent ID listed under experiment.agents.
