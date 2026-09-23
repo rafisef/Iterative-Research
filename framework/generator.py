@@ -44,7 +44,7 @@ _AVG_LINES_PER_FILE = 63.5
 # Average tokens per line of code (conservative estimate across Python/TS/JS).
 _TOKENS_PER_LINE = 10.0
 # Fixed prompt overhead tokens (instruction text, formatting, fences).
-_PROMPT_OVERHEAD_TOKENS = 77
+_PROMPT_OVERHEAD_TOKENS = 74
 
 # Pricing per 1M tokens: (input_cost, output_cost)
 MODEL_PRICING: Dict[str, tuple[float, float]] = {
@@ -438,7 +438,7 @@ def generate_code(
         if iteration == 0:
             input_code = vuln_base_snippet
         else:
-            prev_path = outputs_dir / agent.id / vuln_id / f"iteration_{iteration - 1}{ext}"
+            prev_path = outputs_dir / agent.id / vuln_id / f"iteration_{iteration}{ext}"
             try:
                 input_code = read_text(prev_path)
             except FileNotFoundError:

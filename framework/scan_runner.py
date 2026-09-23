@@ -48,11 +48,25 @@ _SCANNABLE_EXTS = frozenset({
 })
 
 
+def _resolve_semgrep_configs(config: Dict, language: str) -> List[str] | None:
+    """
+    Resolve Semgrep rule configs from the YAML config for a given language.
+
+    Returns a list of --config paths/refs, or None to let the scanner use its
+    language-specific fallback.
+    """
+    semgrep_cfg = config.get("semgrep", {})
+    rules = semgrep_cfg.get("rules", {})
+    lang_rules = rules.get(language)
+    if lang_rules and isinstance(lang_rules, list):
+        return lang_rules
+    return None
+
+
 def run_scans(
     run_dir: Path,
     config: Dict,
     max_workers: int = 1,
-    semgrep_config_override: str = "",
 ) -> None:
     """
     Run static analysis on all generated output files in an existing run directory.
@@ -62,12 +76,10 @@ def run_scans(
     run_dir:
         Path to the run directory (e.g. runs/2026-04-01_11-34-04).
     config:
-        Loaded YAML config dict (used as a model-name fallback in ResultRecord).
+        Loaded YAML config dict (used as a model-name fallback in ResultRecord
+        and to resolve pinned Semgrep rule sets from the semgrep.rules section).
     max_workers:
         Thread pool size for parallel scanning.
-    semgrep_config_override:
-        Space-separated Semgrep rule packs passed from CLI (e.g. "p/xss p/owasp-top-ten").
-        Overrides per-vulnerability defaults when non-empty.
     """
     meta_path = run_dir / "run_metadata.json"
     if not meta_path.exists():
@@ -117,11 +129,8 @@ def run_scans(
 
         if detected_ext:
             ext = detected_ext
-            effective_semgrep = semgrep_config_override or ""
         else:
-            # No generated snippet found; default to TypeScript and no per-vuln overrides
             ext = ".ts"
-            effective_semgrep = semgrep_config_override or ""
 
         snippet_path = outputs_dir / agent_id / vuln_id / f"iteration_{iteration}{ext}"
         if not snippet_path.exists():
@@ -135,16 +144,17 @@ def run_scans(
             file_key = vuln_id
         prompt = generation_log.get((agent_id, file_key, iteration), "")
 
+        language = detect_language(str(snippet_path))
+        semgrep_configs = _resolve_semgrep_configs(config, language)
+
         static_result = run_static_scan(
             snippet_path=str(snippet_path),
             agent=agent_id,
             vulnerability_id=vuln_id,
             iteration=iteration,
             logs_dir=str(logs_dir),
-            semgrep_config_override=effective_semgrep,
+            semgrep_configs=semgrep_configs,
         )
-
-        language = detect_language(str(snippet_path))
         scanners_used = _ENABLED_SCANNERS.get(language, ["semgrep"])
 
         record = ResultRecord(
@@ -234,7 +244,7 @@ def scan_files(
     target: str | Path,
     output_path: str | Path,
     *,
-    semgrep_config: str = "auto",
+    semgrep_configs: List[str] | None = None,
     max_workers: int = 1,
 ) -> Path:
     """
@@ -249,9 +259,9 @@ def scan_files(
     output_path:
         Destination path for the results.jsonl file. Its parent directory is
         created if needed; a ``logs/`` folder is written alongside it.
-    semgrep_config:
-        Space-separated Semgrep rule packs (e.g. "p/xss p/owasp-top-ten").
-        Defaults to "auto" (Semgrep auto-detection).
+    semgrep_configs:
+        List of Semgrep --config values (local YAML paths or registry refs).
+        When None, the language-specific fallback is used.
 
     Returns
     -------
@@ -302,7 +312,7 @@ def scan_files(
             vulnerability_id=vuln_id,
             iteration=iteration,
             logs_dir=str(logs_dir),
-            semgrep_config_override=semgrep_config,
+            semgrep_configs=semgrep_configs,
         )
 
         record = ResultRecord(

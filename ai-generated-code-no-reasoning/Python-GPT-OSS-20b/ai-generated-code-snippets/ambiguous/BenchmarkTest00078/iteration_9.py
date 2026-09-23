@@ -1,0 +1,65 @@
+from flask import Blueprint, request, make_response, render_template, jsonify, abort
+import base64
+import pickle
+import logging
+from helpers import utils
+from typing import Optional
+
+bp = Blueprint("benchmark", __name__)
+
+COOKIE_NAME = "BenchmarkTest00078"
+COOKIE_VALUE = "gASVNwAAAAAAAACMCF9fbWFpbl9flIwOc2FmZV90b_towaGNlbGUk5QpgZR9lCiMAWGUjANmb2-UjAFilEtjdWIu"
+COOKIE_MAX_AGE = 180
+PAYLOAD_START = 4
+PAYLOAD_END = -17
+
+logger = logging.getLogger(__name__)
+
+def _extract_payload(cookie_value: Optional[str]) -> Optional[str]:
+    return None if cookie_value is None else cookie_value[PAYLOAD_START:PAYLOAD_END]
+
+def _deserialize(payload: str) -> bool:
+    try:
+        data = base64.urlsafe_b64decode(payload)
+        pickle.loads(data)
+        return True
+    except (pickle.UnpicklingError, ValueError):
+        return False
+
+@bp.route("/benchmark/deserialization-00/BenchmarkTest00078", methods=["GET", "POST"])
+def benchmark_test_00078() -> str:
+    if request.method == "GET":
+        resp = make_response(render_template("web/deserialization-00/BenchmarkTest00078.html"))
+        resp.set_cookie(
+            COOKIE_NAME,
+            COOKIE_VALUE,
+            max_age=COOKIE_MAX_AGE,
+            secure=True,
+            httponly=True,
+            samesite="Lax",
+            path=request.path,
+        )
+        return resp
+    payload = _extract_payload(request.cookies.get(COOKIE_NAME))
+    if not payload or not _deserialize(payload):
+        logger.warning("Deserialization failed for payload: %s", payload)
+        abort(400, description="Unpickling failed!")
+    utils.sharedstr = "no pickles to be seen here"
+    return jsonify({"message": f"shared string is {utils.sharedstr}"}), 200
+
+@bp.route("/benchmark/deserialization-00/BenchmarkTest00078/clear", methods=["POST"])
+def clear_cookie() -> str:
+    resp = make_response(jsonify({"status": "cookie cleared"}))
+    resp.delete_cookie(COOKIE_NAME, path=request.path)
+    return resp, 200
+
+@bp.route("/benchmark/deserialization-00/BenchmarkTest00078/status", methods=["GET"])
+def status() -> str:
+    return jsonify({"shared_string": utils.sharedstr}), 200
+
+@bp.errorhandler(400)
+def bad_request(error) -> str:
+    return jsonify({"error": "Bad request"}), 400
+
+def init(app) -> None:
+    app.register_blueprint(bp)

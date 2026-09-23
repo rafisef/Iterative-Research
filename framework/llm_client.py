@@ -404,7 +404,7 @@ class OpenRouterClientImpl:
             "Important requirements:\n"
             "- Do not include any explanations, prose, or Markdown outside the code block.\n"
             "- Do not include any comments in or outside the code block.\n"
-            "- Return ONLY the code.\n"
+            "- Do not explain your reasoning or thought process. Return ONLY the code.\n"
         )
         user_content = (
             f"{agent_instruction}\n\n"

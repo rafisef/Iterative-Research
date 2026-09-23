@@ -24,20 +24,20 @@ openrouter:
   enabled: true
   # api_key: or-...  # Optional: set here or use OPENROUTER_API_KEY env var
   # model: openai/gpt-5.6-luna
-  model: anthropic/claude-haiku-4.5
+  model: anthropic/claude-sonnet-4.6
   # LLM parameters — override the llm section defaults when OpenRouter is active.
   # Omit any key to fall back to the value in the llm section above.
   temperature: 0.7
   top_p: 1.0
   
-  # max_tokens: 4096
+  max_tokens: 4096
   # request_delay_seconds: 10.0
   
   # Reasoning configuration — controls whether reasoning mode is used.
   # If reasoning_enabled is true but the model doesn't support reasoning,
   # an error will be raised. If the model supports reasoning but this is false,
   # reasoning will not be used.
-  reasoning_enabled: true
+  reasoning_enabled: false
   
   # Reasoning effort level — controls how much reasoning the model is expected to do.
   reasoning_effort: medium  # low, medium, or high
@@ -46,7 +46,7 @@ openrouter:
   # site_url: https://github.com/your-repo
 
 experiment:
-  iterations: 2
+  iterations: 10
 
   # vulnerabilities:
   #   # ── Python ──────────────────────────────────────────────────────────────
@@ -68,25 +68,41 @@ experiment:
 
   agents:
     - efficiency
-    # - feature
-    # - security
-    # - ambiguous
+    - feature
+    - security
+    - ambiguous
   # Set a fixed integer seed for reproducible prompt selection across runs.
   # Remove or set to null to use non-deterministic (random) selection.
   random_seed: 42
   # Maximum number of worker threads used to process agents in parallel for
   # each iteration. Set to 1 to run everything sequentially.
   # Default max_workers used unless more specific keys are provided below.
-  max_workers: 1
+  max_workers: 4
   # Optional: override workers specifically for generation and scanning stages.
   # If unset, each defaults to the value of `max_workers` above.
   # generate_workers: 4
   # scan_workers: 8
 
-# Scanner selection is automatic — no configuration needed here.
-# The framework detects the language from each snippet's file extension and
-# runs the appropriate tools (Bandit + Semgrep for Python; Semgrep for TypeScript).
-# Per-vulnerability Semgrep pack overrides are defined in framework/vulnerabilities.py.
+# ── Semgrep scanner configuration ───────────────────────────────────────────
+# Pin rule sets for reproducibility — avoids non-deterministic behaviour from
+# --config auto (registry changes over time, auto picks rules by heuristic).
+# Download new packs with:
+#   curl -sL "https://semgrep.dev/c/p/<pack>" -o config/semgrep-rules/<pack>.yml
+semgrep:
+  # Version pinned in the isolated venv at ~/.venvs/semgrep-env.
+  # Reinstall with: pip install semgrep==1.164.0
+  version: "1.164.0"
+  # Per-language rule sets — paths relative to the repo root.
+  # Each list entry is passed as a separate --config flag to Semgrep.
+  rules:
+    python:
+      - config/semgrep-rules/python.yml
+      # - config/semgrep-rules/flask.yml
+      - config/semgrep-rules/owasp-top-ten.yml
+    # typescript:
+    #   - config/semgrep-rules/typescript.yml
+    #   - config/semgrep-rules/javascript.yml
+    #   - config/semgrep-rules/owasp-top-ten.yml
 
 # nuclei:
 #   # Full path to the Nuclei binary. Used by nuclei_rescan.py after a run completes.
@@ -103,7 +119,7 @@ paths:
   #   logs/       — static scan logs
   #   results.jsonl       — JSONL record for every iteration in this run
   #   run_metadata.json   — config snapshot for reproducibility
-  runs_dir: ai-generated-code
+  runs_dir: ai-generated-code-no-reasoning
   # Base snippets directory. Language sub-folders:
   #   snippets/python/<category>/     — Python base snippets
   #   snippets/typescript/<category>/ — TypeScript base snippets

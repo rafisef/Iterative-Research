@@ -1,0 +1,34 @@
+from flask import redirect, url_for, request, make_response, render_template
+from helpers.utils import escape_for_html
+
+def init(app):
+
+    @app.route('/benchmark/xss-00/BenchmarkTest00096', methods=['GET'])
+    def BenchmarkTest00096_get():
+        return BenchmarkTest00096_post()
+
+    @app.route('/benchmark/xss-00/BenchmarkTest00096', methods=['POST'])
+    def BenchmarkTest00096_post():
+        param = request.form.get("BenchmarkTest00096", "")
+        if not isinstance(param, str):
+            param = str(param)
+        if len(param) > 4096:
+            param = param[:4096]
+
+        possible = "ABC"
+        guess = possible[0]
+
+        if guess == 'A':
+            bar = param
+        elif guess == 'B':
+            bar = 'bob'
+        elif guess in ('C', 'D'):
+            bar = param
+        else:
+            bar = "bob's your uncle"
+
+        bar_safe = escape_for_html(bar)
+        otherarg_safe = escape_for_html("static text")
+
+        response_text = f"bar is '{bar_safe}' and otherarg is '{otherarg_safe}'"
+        return make_response(response_text, 200, {"Content-Type": "text/html; charset=utf-8"})

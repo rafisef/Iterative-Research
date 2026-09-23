@@ -22,10 +22,8 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from framework.io_utils import logger
+from framework.io_utils import load_yaml_config, logger
 from framework.scan_runner import scan_files
-
-_DEFAULT_SEMGREP_CONFIG = "auto"
 
 
 def _parse_args() -> argparse.Namespace:
@@ -60,13 +58,21 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--semgrep-config",
         type=str,
-        default=_DEFAULT_SEMGREP_CONFIG,
-        metavar="RULESETS",
+        nargs="*",
+        default=None,
+        metavar="RULE",
         help=(
-            'Space-separated Semgrep rule packs to use instead of defaults. '
-            'Example: "p/xss p/owasp-top-ten". '
-            f'(default: {_DEFAULT_SEMGREP_CONFIG})'
+            'Semgrep rule YAML paths or registry refs to use instead of the '
+            'pinned rules in config.yaml. '
+            'Example: config/semgrep-rules/python.yml p/owasp-top-ten. '
+            'When omitted, rules are read from the semgrep.rules section in config.yaml.'
         ),
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default="config/config.yaml",
+        help="Path to YAML configuration file. Default: config/config.yaml.",
     )
     parser.add_argument(
         "--max-workers",
@@ -83,11 +89,23 @@ def main() -> None:
 
     target = args.code_snippet_dir or args.code_snippet_individual
 
+    # Resolve semgrep configs: CLI flags take precedence, then config.yaml.
+    semgrep_configs = args.semgrep_config
+    if semgrep_configs is None:
+        config = load_yaml_config(args.config)
+        semgrep_cfg = config.get("semgrep", {})
+        rules = semgrep_cfg.get("rules", {})
+        all_rules = []
+        for lang_rules in rules.values():
+            if isinstance(lang_rules, list):
+                all_rules.extend(lang_rules)
+        semgrep_configs = list(dict.fromkeys(all_rules)) if all_rules else None
+
     try:
         output_path = scan_files(
             target=target,
             output_path=args.output,
-            semgrep_config=args.semgrep_config,
+            semgrep_configs=semgrep_configs,
             max_workers=args.max_workers,
         )
     except (FileNotFoundError, ValueError) as exc:

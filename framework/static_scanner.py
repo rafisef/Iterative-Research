@@ -26,12 +26,8 @@ _KOTLIN_EXTS: frozenset[str] = frozenset({".kt"})
 
 _ALL_EXTS: frozenset[str] = _PYTHON_EXTS | _JS_TS_EXTS | _C_EXTS | _JAVA_EXTS | _RUBY_EXTS | _PHP_EXTS | _SWIFT_EXTS | _KOTLIN_EXTS
 
-# Default Semgrep config when no override or per-language packs are selected.
-# "auto" enables Semgrep's built-in auto-detection of relevant rules.
-_DEFAULT_SEMGREP_CONFIG = "auto"
-
-# Per-language rule packs (space-separated; passed as --config flags).
-# Used only when explicitly selected via the UI scanner config sub-menu.
+# Per-language rule packs used as fallback when no config YAML rules are provided.
+# Each value is space-separated paths or registry refs passed as --config flags.
 _LANGUAGE_SEMGREP_PACKS: Dict[str, str] = {
     "python":     "p/python p/bandit p/owasp-top-ten",
     "typescript": "p/typescript p/javascript p/owasp-top-ten",
@@ -228,31 +224,31 @@ def _semgrep_binary() -> Optional[str]:
     return shutil.which("semgrep")
 
 
-def run_semgrep(snippet_path: str, semgrep_config: str = "auto") -> SemgrepResult:
+def run_semgrep(snippet_path: str, semgrep_configs: List[str] | None = None) -> SemgrepResult:
     """
     Run Semgrep using the given rule config(s) and return finding counts plus
     per-finding detail.
 
-    semgrep_config can be space-separated packs (e.g. "p/javascript p/owasp-top-ten")
-    or the special value "auto" which lets Semgrep auto-detect relevant rules.
-    Each pack is passed as a separate --config flag to a single invocation.
+    semgrep_configs is a list of --config values (local YAML paths or registry
+    refs like "p/python"). When empty/None the language-specific fallback from
+    _LANGUAGE_SEMGREP_PACKS is used.
     """
     binary = _semgrep_binary()
     if binary is None:
         return SemgrepResult(errors=["semgrep not found; install with: pip install semgrep"])
 
-    configs = semgrep_config.split()
-    if not configs:
-        configs = ["auto"]
+    if not semgrep_configs:
+        language = detect_language(snippet_path)
+        fallback = _LANGUAGE_SEMGREP_PACKS.get(language, "p/owasp-top-ten")
+        semgrep_configs = fallback.split()
 
     cmd = [binary]
-    for cfg in configs:
+    for cfg in semgrep_configs:
         cmd += ["--config", cfg]
-    cmd += ["--json", "--quiet", "--no-git-ignore", snippet_path]
+    cmd += ["--metrics=off", "--json", "--quiet", "--no-git-ignore", snippet_path]
     logger.debug("Running semgrep: %s", " ".join(cmd))
 
     try:
-        print("|SEMGREP CMD|: ", " ".join(cmd))
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         raw = proc.stdout or ""
         if not raw.strip():
@@ -326,25 +322,20 @@ def run_static_scan(
     vulnerability_id: str,
     iteration: int,
     logs_dir: str,
-    semgrep_config_override: str = "",
+    semgrep_configs: List[str] | None = None,
 ) -> StaticScanResult:
     """
     Run all applicable static analysis backends against a snippet file.
 
     The language is detected automatically from the file extension and the
     appropriate scanners from _ENABLED_SCANNERS are invoked.  Semgrep rule
-    packs come from _DEFAULT_SEMGREP_PACKS unless ``semgrep_config_override``
-    is provided (per-vulnerability override from the registry).
+    configs come from ``semgrep_configs`` (list of local YAML paths or
+    registry refs).  When None, the language-specific fallback is used.
 
     Writes a combined JSON log and returns a StaticScanResult.
     """
     language = detect_language(snippet_path)
     active_scanners = _ENABLED_SCANNERS.get(language, ["semgrep"])
-    effective_semgrep_packs = (
-        semgrep_config_override
-        if semgrep_config_override
-        else _DEFAULT_SEMGREP_CONFIG
-    )
 
     bandit_result = BanditResult()
     semgrep_result = SemgrepResult()
@@ -368,7 +359,7 @@ def run_static_scan(
             "Running semgrep for agent=%s file=%s iteration=%d",
             agent, Path(snippet_path).name, iteration + 1,
         )
-        semgrep_result = run_semgrep(snippet_path, effective_semgrep_packs)
+        semgrep_result = run_semgrep(snippet_path, semgrep_configs)
         if semgrep_result.errors:
             logger.warning("Semgrep errors: %s", semgrep_result.errors)
         else:

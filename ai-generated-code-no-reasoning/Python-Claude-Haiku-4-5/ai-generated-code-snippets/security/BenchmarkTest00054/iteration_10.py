@@ -1,0 +1,287 @@
+'''
+OWASP Benchmark for Python v0.1
+
+This file is part of the Open Web Application Security Project (OWASP) Benchmark Project.
+For details, please see https://owasp.org/www-project-benchmark.
+
+The OWASP Benchmark is free software: you can redistribute it and/or modify it under the terms
+of the GNU General Public License as published by the Free Software Foundation, version 3.
+
+The OWASP Benchmark is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
+PURPOSE. See the GNU General Public License for more details.
+
+  Author: Theo Cartsonis
+  Created: 2025
+'''
+
+from flask import redirect, url_for, request, make_response, render_template
+from helpers.utils import escape_for_html
+import hashlib
+import base64
+import io
+import helpers.utils
+import os
+from pathlib import Path
+import logging
+import secrets
+import hmac
+import re
+from functools import wraps
+from datetime import datetime, timedelta
+import threading
+import time
+import urllib.parse
+from typing import Tuple, Optional
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.backends import default_backend
+
+logger = logging.getLogger(__name__)
+
+MAX_INPUT_LENGTH = 1000
+HASH_ALGORITHM = 'sha256'
+COOKIE_MAX_AGE = 60 * 3
+RATE_LIMIT_REQUESTS = 10
+RATE_LIMIT_WINDOW = 60
+REQUEST_TIMEOUT = 30
+CSRF_TOKEN_LENGTH = 43
+RATE_LIMIT_CLEANUP_THRESHOLD = 10000
+CLIENT_ID_HASH_LENGTH = 16
+MAX_FILE_SIZE = 1024 * 1024
+MAX_FILE_LINES = 10000
+MAX_COOKIE_SIZE = 4096
+MAX_FORM_DATA_SIZE = 10 * 1024
+ALLOWED_DOMAINS = os.environ.get('ALLOWED_DOMAINS', '').split(',')
+CONTENT_SECURITY_POLICY = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;"
+
+request_counts = {}
+request_counts_lock = threading.Lock()
+cleanup_lock = threading.Lock()
+
+def validate_input(param: str) -> Tuple[bool, str]:
+    if not isinstance(param, str):
+        return False, "Invalid input type"
+    
+    if len(param) == 0:
+        return False, "Input was empty"
+    
+    if len(param) > MAX_INPUT_LENGTH:
+        return False, "Input exceeds maximum length"
+    
+    try:
+        param.encode('utf-8')
+    except UnicodeEncodeError:
+        return False, "Invalid input encoding"
+    
+    if re.search(r'[<>\"\'&]', param):
+        return False, "Invalid characters in input"
+    
+    return True, param
+
+def rate_limit_check(client_id: str) -> bool:
+    current_time = time.time()
+    
+    with request_counts_lock:
+        if client_id not in request_counts:
+            request_counts[client_id] = []
+        
+        request_counts[client_id] = [
+            t for t in request_counts[client_id] 
+            if current_time - t < RATE_LIMIT_WINDOW
+        ]
+        
+        if len(request_counts[client_id]) >= RATE_LIMIT_REQUESTS:
+            return False
+        
+        request_counts[client_id].append(current_time)
+        
+        if len(request_counts) > RATE_LIMIT_CLEANUP_THRESHOLD:
+            with cleanup_lock:
+                if len(request_counts) > RATE_LIMIT_CLEANUP_THRESHOLD:
+                    oldest_client = min(
+                        request_counts.keys(), 
+                        key=lambda k: min(request_counts[k]) if request_counts[k] else current_time
+                    )
+                    del request_counts[oldest_client]
+        
+        return True
+
+def get_client_identifier() -> str:
+    client_ip = request.remote_addr or "unknown"
+    user_agent = request.headers.get('User-Agent', '')[:100]
+    client_string = f"{client_ip}:{user_agent}"
+    return hashlib.sha256(client_string.encode('utf-8')).hexdigest()[:CLIENT_ID_HASH_LENGTH]
+
+def validate_file_state(file_path: Path) -> None:
+    if file_path.exists():
+        file_size = file_path.stat().st_size
+        if file_size > MAX_FILE_SIZE:
+            raise ValueError("File size exceeds maximum allowed")
+        
+        with open(file_path, 'r', encoding='utf-8') as f:
+            line_count = sum(1 for _ in f)
+            if line_count > MAX_FILE_LINES:
+                raise ValueError("File line count exceeds maximum allowed")
+
+def validate_csrf_token(cookie_token: Optional[str], form_token: Optional[str]) -> bool:
+    if not cookie_token or not form_token:
+        return False
+    
+    if len(cookie_token) != CSRF_TOKEN_LENGTH or len(form_token) != CSRF_TOKEN_LENGTH:
+        return False
+    
+    if not re.match(r'^[A-Za-z0-9_\-]*$', cookie_token) or not re.match(r'^[A-Za-z0-9_\-]*$', form_token):
+        return False
+    
+    return hmac.compare_digest(cookie_token, form_token)
+
+def set_security_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers['Content-Security-Policy'] = CONTENT_SECURITY_POLICY
+    response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    response.headers['Permissions-Policy'] = 'geolocation=(), microphone=(), camera=()'
+    return response
+
+def init(app):
+
+    @app.route('/benchmark/hash-00/BenchmarkTest00054', methods=['GET'])
+    def BenchmarkTest00054_get():
+        try:
+            if request.content_length and request.content_length > MAX_FORM_DATA_SIZE:
+                logger.warning("Request content length exceeds maximum")
+                return "Request too large.", 413
+            
+            response = make_response(render_template('web/hash-00/BenchmarkTest00054.html'))
+            csrf_token = secrets.token_urlsafe(32)
+            response.set_cookie(
+                'BenchmarkTest00054',
+                csrf_token,
+                max_age=COOKIE_MAX_AGE,
+                secure=True,
+                httponly=True,
+                samesite='Strict',
+                path='/',
+                domain=None
+            )
+            response.set_cookie(
+                'csrf_token',
+                csrf_token,
+                max_age=COOKIE_MAX_AGE,
+                secure=True,
+                httponly=True,
+                samesite='Strict',
+                path='/',
+                domain=None
+            )
+            response = set_security_headers(response)
+            return response
+        except Exception as e:
+            logger.error(f"Error in GET handler: {type(e).__name__}")
+            return "Internal server error.", 500
+
+    @app.route('/benchmark/hash-00/BenchmarkTest00054', methods=['POST'])
+    def BenchmarkTest00054_post():
+        RESPONSE = ""
+
+        try:
+            if request.content_length and request.content_length > MAX_FORM_DATA_SIZE:
+                logger.warning("Request content length exceeds maximum")
+                return "Request too large.", 413
+
+            if request.method == 'POST' and not request.is_secure:
+                logger.warning("Non-HTTPS POST request attempted")
+                return "Insecure request rejected.", 403
+
+            client_id = get_client_identifier()
+            if not rate_limit_check(client_id):
+                logger.warning(f"Rate limit exceeded for client {client_id}")
+                return "Rate limit exceeded.", 429
+
+            csrf_token_cookie = request.cookies.get("csrf_token")
+            csrf_token_form = request.form.get("csrf_token")
+            
+            if not validate_csrf_token(csrf_token_cookie, csrf_token_form):
+                logger.warning("CSRF token validation failed")
+                return "Request validation failed.", 403
+
+            try:
+                param = request.form.get("BenchmarkTest00054", "")
+                if not isinstance(param, str) or len(param) > MAX_FORM_DATA_SIZE:
+                    raise ValueError("Invalid form parameter")
+                param = urllib.parse.unquote_plus(param)
+            except Exception as e:
+                logger.error(f"URL decode error: {type(e).__name__}")
+                return "Request validation failed.", 400
+
+            is_valid, result = validate_input(param)
+            if not is_valid:
+                RESPONSE += f'Cannot generate hash: {result}.'
+                response = make_response(RESPONSE, 400)
+                return set_security_headers(response)
+            
+            param = result
+
+            try:
+                input_data = param.encode('utf-8')
+            except UnicodeEncodeError:
+                logger.error("Invalid UTF-8 encoding in input")
+                RESPONSE += 'Cannot generate hash: Invalid input encoding.'
+                response = make_response(RESPONSE, 400)
+                return set_security_headers(response)
+
+            if len(input_data) == 0:
+                RESPONSE += 'Cannot generate hash: Input was empty.'
+                response = make_response(RESPONSE, 400)
+                return set_security_headers(response)
+
+            try:
+                hash_obj = hashlib.sha256()
+                hash_obj.update(input_data)
+                result = hash_obj.digest()
+            except Exception as e:
+                logger.error(f"Hashing error: {type(e).__name__}")
+                RESPONSE += 'Cannot generate hash: Processing error.'
+                response = make_response(RESPONSE, 500)
+                return set_security_headers(response)
+
+            try:
+                file_path = Path(helpers.utils.TESTFILES_DIR).resolve() / 'passwordFile.txt'
+                testfiles_dir = Path(helpers.utils.TESTFILES_DIR).resolve()
+                
+                if not file_path.resolve().is_relative_to(testfiles_dir):
+                    raise ValueError("Path traversal attempt detected")
+                
+                if not testfiles_dir.exists():
+                    testfiles_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+                
+                testfiles_dir.chmod(0o700)
+                
+                validate_file_state(file_path)
+                
+                encoded_hash = base64.b64encode(result).decode("utf-8")
+                sanitized_input = escape_for_html(param)
+                
+                file_path.touch(mode=0o600, exist_ok=True)
+                
+                with open(file_path, 'a', encoding='utf-8') as f:
+                    timestamp = datetime.utcnow().isoformat()
+                    f.write(f'timestamp={timestamp},hash_value={encoded_hash}\n')
+                
+                file_path.chmod(0o600)
+                
+                RESPONSE += f'Sensitive value \'{sanitized_input}\' hashed and stored.'
+                response = make_response(RESPONSE, 200)
+                return set_security_headers(response)
+            except (IOError, OSError, ValueError) as e:
+                logger.error(f"Error processing request: {type(e).__name__}")
+                RESPONSE += 'Error processing request.'
+                response = make_response(RESPONSE, 500)
+                return set_security_headers(response)
+
+        except Exception as e:
+            logger.error(f"Unhandled exception in POST handler: {type(e).__name__}")
+            response = make_response("Internal server error.", 500)
+            return set_security_headers(response)

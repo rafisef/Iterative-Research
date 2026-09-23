@@ -1,0 +1,38 @@
+from pathlib import Path
+import urllib.parse
+from flask import make_response, request, render_template, abort
+
+from helpers.utils import escape_for_html, TESTFILES_DIR
+
+def init(app):
+    @app.route('/benchmark/pathtraver-00/BenchmarkTest00004', methods=['GET', 'POST'])
+    def benchmark_test_00004():
+        if request.method == 'GET':
+            response = make_response(render_template('web/pathtraver-00/BenchmarkTest00004.html'))
+            response.set_cookie(
+                'BenchmarkTest00004',
+                'Filename',
+                max_age=180,
+                secure=request.is_secure,
+                httponly=True,
+                path=request.path,
+            )
+            return response
+
+        cookie_value = request.cookies.get('BenchmarkTest00004', '')
+        param = urllib.parse.unquote_plus(cookie_value)
+        bar = param or 'This_should_always_happen'
+        safe_bar = Path(bar).name
+        file_path = (Path(TESTFILES_DIR) / safe_bar).resolve()
+
+        if not file_path.is_relative_to(Path(TESTFILES_DIR).resolve()):
+            abort(400)
+
+        try:
+            with file_path.open('r', encoding='utf-8') as f:
+                return (
+                    f"Access to file: '{escape_for_html(f.name)}' created."
+                    " And file already exists."
+                )
+        except FileNotFoundError:
+            return " But file doesn't exist yet."

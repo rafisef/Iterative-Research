@@ -12,7 +12,7 @@ from .analyzer import analyze_run
 from .generator import discover_snippets_from_dir, generate_code, write_run_metadata, Vulnerability
 from .io_utils import AI_CODE_DIR, ensure_dir, load_yaml_config, logger, read_text
 from .llm_client import detect_available_models, get_llm_client
-from .scan_runner import run_scans
+from .scan_runner import _resolve_semgrep_configs, run_scans
 from .static_scanner import detect_language, run_static_scan
 
 
@@ -169,12 +169,15 @@ def _execute_test_run(
 
   agent = agents[0]
   vuln = vulns[0]
+  test_language = detect_language(test_run_snippet)
+  test_semgrep_configs = _resolve_semgrep_configs(config, test_language)
   test_static_result = run_static_scan(
     snippet_path=test_run_snippet,
     agent=agent.id,
     vulnerability_id=vuln.id,
     iteration=0,
     logs_dir=logs_dir,
+    semgrep_configs=test_semgrep_configs,
   )
 
   separator = "=" * 60
@@ -418,11 +421,22 @@ def run_experiment(config_path: str | None = None, cli_args: Dict | None = None)
     banner_reasoning = False
 
   meta_path = str(run_dir / "run_metadata.json")
+  semgrep_rules_cfg = config.get("semgrep", {}).get("rules", {})
+  semgrep_version = config.get("semgrep", {}).get("version", "unpinned")
   if test_run_flag:
-    scanners_line = f"test run — auto-detected  snippet={test_run_snippet}"
+    scanners_line = f"test run — snippet={test_run_snippet}"
+  elif semgrep_rules_cfg:
+    rule_files = []
+    for lang_rules in semgrep_rules_cfg.values():
+      if isinstance(lang_rules, list):
+        rule_files.extend(lang_rules)
+    unique_rules = list(dict.fromkeys(rule_files))
+    scanners_line = (
+      f"Semgrep {semgrep_version} — pinned rules: {', '.join(Path(r).stem for r in unique_rules)}"
+    )
   else:
     scanners_line = (
-      "auto-detected per snippet language (Bandit+Semgrep for Python, Semgrep for TypeScript)"
+      f"Semgrep {semgrep_version} — language-specific fallback packs"
     )
   col = 19
   separator = "=" * 60
