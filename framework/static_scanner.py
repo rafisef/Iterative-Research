@@ -376,17 +376,9 @@ def run_static_scan(
     log_data = {
         "snippet_path": snippet_path,
         "language": language,
-        "agent": agent,
-        # Use explicit filename field instead of legacy vulnerability id
         "file": Path(snippet_path).name,
-        # Keep zero-based numeric index for internal compatibility
         "iteration": iteration,
-        # Human-facing 1-based iteration for logs
         "iteration_display": iteration + 1,
-        "bandit": {
-            "high": bandit_result.high, "medium": bandit_result.medium, "low": bandit_result.low,
-            "issues": bandit_result.issues, "errors": bandit_result.errors,
-        },
         "semgrep": {
             "findings": semgrep_result.findings,
             "high": semgrep_result.high, "medium": semgrep_result.medium, "low": semgrep_result.low,

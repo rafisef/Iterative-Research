@@ -126,7 +126,7 @@ def analyze_run(
                 ("semgrep_low", "Semgrep LOW"),
             ]
     else:
-        metric_keys = [("nuclei_exit_code", "Nuclei exit")]
+        metric_keys = []
 
     print_trend_table(grouped, metric_keys)
 
@@ -352,10 +352,8 @@ def print_summary(records: List[Dict[str, Any]], results_path: str) -> None:
     print(f"  Models          : {', '.join(models)}")
     print(f"  Iterations      : {min(iters)} \u2013 {max(iters)}  ({len(iters)} distinct values)")
 
-    has_static = any(r.get("bandit_high") is not None for r in records)
-    has_nuclei = any(r.get("nuclei_exit_code") is not None for r in records)
+    has_static = any(r.get("bandit_high") is not None or r.get("semgrep_findings") is not None for r in records)
     print(f"  Static scans    : {'yes' if has_static else 'no'}")
-    print(f"  Nuclei scans    : {'yes' if has_nuclei else 'no'}")
 
     if meta:
         seed = meta.get("random_seed")
@@ -565,7 +563,7 @@ def write_csv(
         run_id, file, agent, model, iteration, prompt,
         bandit_high, bandit_medium, bandit_low,
         semgrep_findings, semgrep_high, semgrep_medium, semgrep_low,
-        nuclei_exit_code, server_started, success, snippet_path, static_log_path
+        snippet_path, static_log_path
 
     Finding columns (empty when no findings):
         finding_tool      — "bandit" | "semgrep" | ""
@@ -582,7 +580,6 @@ def write_csv(
         "run_id", "file", "agent", "model", "iteration", "prompt",
         "bandit_high", "bandit_medium", "bandit_low",
         "semgrep_findings", "semgrep_high", "semgrep_medium", "semgrep_low",
-        "nuclei_exit_code", "server_started", "success",
         "snippet_path", "static_log_path",
     ]
     finding_fields = [
@@ -697,7 +694,6 @@ def analyze_run_json(
             r.get("bandit_high") is not None or r.get("semgrep_findings") is not None
             for r in records
         ),
-        "has_nuclei_scans": any(r.get("nuclei_exit_code") is not None for r in records),
         "random_seed": meta.get("random_seed") if meta else None,
         "started_at": meta.get("started_at") if meta else None,
     }

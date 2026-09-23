@@ -71,9 +71,6 @@ class ResultRecord:
   iteration: int
   prompt: str
   model: str
-  success: bool
-  server_started: bool
-  nuclei_exit_code: int | None
   snippet_path: str
   log_path: str
   # Static analysis results (Bandit + Semgrep) — counts.
